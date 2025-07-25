@@ -18,6 +18,7 @@ class _DatabaseDemoScreenState extends State<DatabaseDemoScreen> {
   Map<String, dynamic>? _databaseStatus;
   bool _isLoading = false;
   String _message = '';
+  bool _hasDataChanged = false; // 跟踪数据是否有变更
 
   @override
   void initState() {
@@ -66,6 +67,7 @@ class _DatabaseDemoScreenState extends State<DatabaseDemoScreen> {
 
     try {
       await _dataService.createSampleData();
+      _hasDataChanged = true; // 标记数据已变更
       await _refreshStatus();
       setState(() {
         _message = '示例数据创建成功';
@@ -90,6 +92,7 @@ class _DatabaseDemoScreenState extends State<DatabaseDemoScreen> {
 
     try {
       await _dataService.clearAllData();
+      _hasDataChanged = true; // 标记数据已变更
       await _refreshStatus();
       setState(() {
         _message = '数据清理完成';
@@ -138,6 +141,7 @@ class _DatabaseDemoScreenState extends State<DatabaseDemoScreen> {
 
       await _dataService.tagRecords.insert(testRecord);
 
+      _hasDataChanged = true; // 标记数据已变更
       await _refreshStatus();
       setState(() {
         _message = '标签操作测试完成';
@@ -159,6 +163,12 @@ class _DatabaseDemoScreenState extends State<DatabaseDemoScreen> {
       appBar: AppBar(
         title: const Text('数据库演示'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.of(context).pop(_hasDataChanged);
+          },
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),

@@ -22,14 +22,16 @@
 ### 核心组件
 
 #### 1. 日历组件 (CalendarWidget)
-- **职责**: 显示月/周视图，渲染标签数据和预测信息
-- **设计决策**: 自定义日历组件而非第三方库，确保完全控制数据可视化效果
+- **职责**: 显示月/周视图，渲染标签数据和预测信息，支持单标签聚焦模式
+- **设计决策**: 自定义日历组件而非第三方库，确保完全控制数据可视化效果，支持热力图和放大标记模式
 - **接口**:
   ```dart
   class CalendarWidget extends StatefulWidget {
     final CalendarMode mode; // 月视图/周视图
-    final List<Tag> selectedTags; // 当前筛选的标签
+    final Tag? focusedTag; // 当前聚焦的标签，null表示显示所有标签
     final Function(DateTime) onDateSelected;
+    final Function(DateTime) onDateDoubleClicked; // 双击进入记录界面
+    final Function() onBlankAreaClicked; // 点击空白区域
   }
   ```
 
@@ -45,14 +47,16 @@
   }
   ```
 
-#### 3. 日记界面 (DiaryInterface)
-- **职责**: 提供快速输入界面，整合标签输入和富文本编辑
-- **设计决策**: 单页面集成所有输入方式，减少用户操作步骤，符合需求4
+#### 3. 标签管理界面 (TagManagementPanel)
+- **职责**: 提供折叠式标签管理界面，支持快速添加、修改和删除标签
+- **设计决策**: 折叠式设计节省空间，长按交互提供直观的操作方式，符合需求4
 - **接口**:
   ```dart
-  class DiaryInterface extends StatefulWidget {
+  class TagManagementPanel extends StatefulWidget {
     final DateTime selectedDate;
-    final List<Tag> presetTags;
+    final List<Tag> allTags;
+    final Function(Tag, bool) onTagVisibilityChanged; // 标签可见性切换
+    final Function(Tag) onTagLongPress; // 长按标签处理
   }
   ```
 
@@ -177,9 +181,9 @@ class DiaryEntry {
 **决策**: 采用三种标签类型（量化、非量化、复杂）
 **理由**: 覆盖用户不同的记录需求，量化标签用于可测量状态，非量化标签用于是/否事件，复杂标签用于多维度状态
 
-### 2. 日记界面集成设计
-**决策**: 单一界面集成所有输入方式
-**理由**: 减少用户在不同界面间切换，提高输入效率，符合快速记录的需求
+### 2. 折叠式标签管理设计
+**决策**: 采用折叠条 + 长按交互的标签管理方式
+**理由**: 节省界面空间，长按交互符合移动端操作习惯，已添加/未添加标签的视觉区分提高操作效率
 
 ### 3. 预测算法设计
 **决策**: 支持手动和自动周期设置

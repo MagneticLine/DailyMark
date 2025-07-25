@@ -12,12 +12,13 @@
 
 #### Acceptance Criteria
 
-1. WHEN 用户选择某个日期 THEN 系统 SHALL 显示该日期的状态记录界面
+1. WHEN 用户双击某个日期 THEN 系统 SHALL 显示该日期的状态记录界面
 2. WHEN 用户创建新的量化标签 THEN 系统 SHALL 允许用户自定义评分范围（数值或文字如差优良）
 3. WHEN 用户对某个标签进行评价 THEN 系统 SHALL 保存该评价并关联到当前日期
 4. WHEN 用户查看某标签的月视图 THEN 系统 SHALL 通过颜色深浅、数值或条形图显示标签状态的起伏变化
 5. WHEN 用户查看某标签的周视图 THEN 系统 SHALL 显示该周内各标签的状态变化趋势
-6. WHEN 用户切换不同标签 THEN 系统 SHALL 更新日历视图以显示对应标签的数据
+6. WHEN 用户点击特定标签 THEN 系统 SHALL 隐藏其他标签数据，仅显示当前标签的热力图或放大标记
+7. WHEN 用户点击空白处 THEN 系统 SHALL 恢复显示所有标签数据
 
 ### Requirement 2
 
@@ -42,15 +43,17 @@
 
 ### Requirement 4
 
-**User Story:** 作为用户，我希望通过日记形式的主界面快速输入信息，而不需要逐个点击标签填写。
+**User Story:** 作为用户，我希望通过折叠式标签界面快速管理当日标签，以便高效地记录和修改状态。
 
 #### Acceptance Criteria
 
-1. WHEN 用户打开日记界面 THEN 系统 SHALL 显示预设的标签行和大文本框
-2. WHEN 用户点击标签行 THEN 系统 SHALL 根据标签类型弹出相应的输入界面（数值+单位选择器、半透明标签选择器、是/否选择器）
-3. WHEN 用户在文本框中输入内容 THEN 系统 SHALL 支持文字、图像、超文本、声音、视频的记录
-4. WHEN 用户保存日记 THEN 系统 SHALL 自动将标签数据和日记内容关联到当前日期
-5. WHEN 用户完成输入 THEN 系统 SHALL 将所有信息保存到对应日期
+1. WHEN 用户查看日历下方 THEN 系统 SHALL 显示一个折叠条，点击后展开显示标签管理界面
+2. WHEN 折叠条展开 THEN 系统 SHALL 显示已添加标签（原色）和未添加标签（半透明浅色）
+3. WHEN 用户长按已添加标签 THEN 系统 SHALL 弹出修改数值窗口，包含删除按钮
+4. WHEN 用户长按未添加标签 THEN 系统 SHALL 自动为当日添加该标签并弹出数值修改窗口
+5. WHEN 用户点击已添加或未添加标签 THEN 系统 SHALL 在日历上仅显示该标签的数据可视化
+6. WHEN 用户点击空白处 THEN 系统 SHALL 恢复显示所有标签的数据
+7. WHEN 标签管理界面宽度 THEN 系统 SHALL 与日历宽度保持一致
 
 ### Requirement 5
 

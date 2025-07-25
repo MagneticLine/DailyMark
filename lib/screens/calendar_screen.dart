@@ -1,12 +1,19 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'database_demo_screen.dart';
 import 'tag_management_screen.dart';
+import 'diary_input_screen.dart';
+import '../models/models.dart';
+import '../repositories/tag_repository.dart';
+import '../repositories/tag_record_repository.dart';
+import '../widgets/tag_management_panel.dart';
+import '../widgets/tag_value_dialog.dart';
+import '../constants/heatmap_colors.dart';
 
 /// 日历主界面
 /// 
-/// 这是应用的核心界面，显示月视图日历并支持日期选择
-/// 采用现代极简设计风格，符合Material 3设计规范
+/// 重构版本：清晰的模式分离和统一的背景色策略
 class CalendarScreen extends StatefulWidget {
   const CalendarScreen({super.key});
 
@@ -15,6 +22,9 @@ class CalendarScreen extends StatefulWidget {
 }
 
 class _CalendarScreenState extends State<CalendarScreen> {
+  final TagRepository _tagRepository = TagRepository();
+  final TagRecordRepository _recordRepository = TagRecordRepository();
+  
   // 日历格式：月视图
   CalendarFormat _calendarFormat = CalendarFormat.month;
   
@@ -23,12 +33,27 @@ class _CalendarScreenState extends State<CalendarScreen> {
   
   // 用户选中的日期
   DateTime? _selectedDay;
+  
+  // 标签和记录数据
+  List<Tag> _allTags = [];
+  final Map<String, List<TagRecord>> _tagRecords = {};
+  
+  // 数据刷新计数器，用于触发子组件重新加载
+  int _dataRefreshCounter = 0;
+  
+  // 单标签聚焦模式状态
+  Tag? _focusedTag; // 当前聚焦的标签，null表示普通模式
+  
+  // 数据缓存优化
+  final Map<String, Map<String, TagRecord>> _recordCache = {}; // tagId -> {dateKey -> record}
+  DateTime? _cachedMonth; // 当前缓存的月份
 
   @override
   void initState() {
     super.initState();
     // 初始化时选中今天
     _selectedDay = DateTime.now();
+    _loadTagsAndRecords();
   }
 
   @override
@@ -43,225 +68,236 @@ class _CalendarScreenState extends State<CalendarScreen> {
         actions: [
           // 标签管理按钮
           IconButton(
-            onPressed: () {
-              Navigator.of(context).push(
+            onPressed: () async {
+              final result = await Navigator.of(context).push<bool>(
                 MaterialPageRoute(
                   builder: (context) => const TagManagementScreen(),
                 ),
               );
+              
+              // 如果有数据变更，重新加载数据
+              if (result == true) {
+                await _loadTagsAndRecords();
+                setState(() {
+                  _dataRefreshCounter++;
+                });
+              }
             },
             icon: const Icon(Icons.label),
             tooltip: '标签管理',
           ),
           // 数据库演示按钮
           IconButton(
-            onPressed: () {
-              Navigator.of(context).push(
+            onPressed: () async {
+              final result = await Navigator.of(context).push<bool>(
                 MaterialPageRoute(
                   builder: (context) => const DatabaseDemoScreen(),
                 ),
               );
+              
+              // 如果有数据变更，重新加载数据
+              if (result == true) {
+                await _loadTagsAndRecords();
+                setState(() {
+                  _dataRefreshCounter++;
+                });
+              }
             },
             icon: const Icon(Icons.storage),
             tooltip: '数据库演示',
           ),
-          // 今天按钮 - 快速回到当前日期
-          IconButton(
-            onPressed: _goToToday,
-            icon: const Icon(Icons.today),
-            tooltip: '回到今天',
-          ),
         ],
       ),
-      body: Column(
-        children: [
-          // 日历组件
-          Card(
-            margin: const EdgeInsets.all(16),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: TableCalendar<dynamic>(
-                // 设置日历行高，确保方形单元格有足够空间
-                rowHeight: 60,
-                // 基础配置
-                firstDay: DateTime.utc(2020, 1, 1),
-                lastDay: DateTime.utc(2030, 12, 31),
-                focusedDay: _focusedDay,
-                
-                // 日历格式
-                calendarFormat: _calendarFormat,
-                
-                // 选中日期
-                selectedDayPredicate: (day) {
-                  return isSameDay(_selectedDay, day);
-                },
-                
-                // 日期选择回调
-                onDaySelected: _onDaySelected,
-                
-                // 页面变化回调（月份切换）
-                onPageChanged: (focusedDay) {
-                  _focusedDay = focusedDay;
-                },
-                
-                // 格式变化回调
-                onFormatChanged: (format) {
-                  if (_calendarFormat != format) {
-                    setState(() {
-                      _calendarFormat = format;
-                    });
-                  }
-                },
-                
-                // 样式配置 - 台历式方形设计
-                calendarStyle: CalendarStyle(
-                  // 外部装饰
-                  outsideDaysVisible: false,
+      body: GestureDetector(
+        // 点击空白处取消聚焦
+        onTap: () => _handleBackgroundTap(),
+        behavior: HitTestBehavior.translucent,
+        child: Column(
+          children: [
+            // 日历组件
+            Card(
+              margin: const EdgeInsets.all(16),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: TableCalendar<dynamic>(
+                  // 设置日历行高
+                  rowHeight: 60,
+                  // 基础配置
+                  firstDay: DateTime.utc(2020, 1, 1),
+                  lastDay: DateTime.utc(2030, 12, 31),
+                  focusedDay: _focusedDay,
                   
-                  // 单元格大小和间距
-                  cellMargin: const EdgeInsets.all(0), // 紧密相连，无间距
-                  cellPadding: const EdgeInsets.all(0),
+                  // 日历格式
+                  calendarFormat: _calendarFormat,
                   
-                  // 今天的样式 - 方形边框
-                  todayDecoration: BoxDecoration(
-                    border: Border.all(
+                  // 选中日期
+                  selectedDayPredicate: (day) {
+                    return isSameDay(_selectedDay, day);
+                  },
+                  
+                  // 日期选择回调
+                  onDaySelected: _onDaySelected,
+                  
+                  // 页面变化回调（月份切换）
+                  onPageChanged: (focusedDay) {
+                    _focusedDay = focusedDay;
+                    _loadTagsAndRecords();
+                  },
+                  
+                  // 格式变化回调
+                  onFormatChanged: (format) {
+                    if (_calendarFormat != format) {
+                      setState(() {
+                        _calendarFormat = format;
+                      });
+                    }
+                  },
+                  
+                  // 样式配置
+                  calendarStyle: CalendarStyle(
+                    outsideDaysVisible: false,
+                    cellMargin: const EdgeInsets.all(0),
+                    cellPadding: const EdgeInsets.all(0),
+                    
+                    // 今天的样式
+                    todayDecoration: BoxDecoration(
+                      border: Border.all(
+                        color: colorScheme.outline.withValues(alpha: 0.2),
+                        width: 0.5,
+                      ),
+                      shape: BoxShape.rectangle,
+                    ),
+                    todayTextStyle: TextStyle(
+                      color: colorScheme.onSurface,
+                      fontSize: 16,
+                    ),
+                    
+                    // 选中日期的样式
+                    selectedDecoration: BoxDecoration(
+                      color: colorScheme.primary.withValues(alpha: 0.2),
+                      border: Border.all(
+                        color: colorScheme.primary,
+                        width: 2,
+                      ),
+                      shape: BoxShape.rectangle,
+                    ),
+                    selectedTextStyle: TextStyle(
                       color: colorScheme.primary,
-                      width: 2,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
                     ),
-                    shape: BoxShape.rectangle,
-                  ),
-                  todayTextStyle: TextStyle(
-                    color: colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
+                    
+                    // 默认日期样式
+                    defaultTextStyle: TextStyle(
+                      color: colorScheme.onSurface,
+                      fontSize: 16,
+                    ),
+                    
+                    // 周末样式
+                    weekendTextStyle: TextStyle(
+                      color: colorScheme.error,
+                      fontSize: 16,
+                    ),
+                    
+                    // 默认装饰
+                    defaultDecoration: BoxDecoration(
+                      border: Border.all(
+                        color: colorScheme.outline.withValues(alpha: 0.2),
+                        width: 0.5,
+                      ),
+                      shape: BoxShape.rectangle,
+                    ),
+                    
+                    // 周末装饰
+                    weekendDecoration: BoxDecoration(
+                      border: Border.all(
+                        color: colorScheme.outline.withValues(alpha: 0.2),
+                        width: 0.5,
+                      ),
+                      shape: BoxShape.rectangle,
+                    ),
+                    
+                    // 隐藏默认标记
+                    markersMaxCount: 0,
                   ),
                   
-                  // 选中日期的样式 - 方形背景
-                  selectedDecoration: BoxDecoration(
-                    color: colorScheme.primary.withValues(alpha: 0.2),
-                    border: Border.all(
+                  // 头部样式
+                  headerStyle: HeaderStyle(
+                    formatButtonVisible: true,
+                    formatButtonShowsNext: false,
+                    formatButtonDecoration: BoxDecoration(
                       color: colorScheme.primary,
-                      width: 2,
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                    shape: BoxShape.rectangle,
-                  ),
-                  selectedTextStyle: TextStyle(
-                    color: colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
-                  ),
-                  
-                  // 默认日期样式
-                  defaultTextStyle: TextStyle(
-                    color: colorScheme.onSurface,
-                    fontSize: 16,
-                  ),
-                  
-                  // 周末样式
-                  weekendTextStyle: TextStyle(
-                    color: colorScheme.error,
-                    fontSize: 16,
-                  ),
-                  
-                  // 默认装饰 - 添加淡边框以区分日期格子
-                  defaultDecoration: BoxDecoration(
-                    border: Border.all(
-                      color: colorScheme.outline.withValues(alpha: 0.2),
-                      width: 0.5,
+                    formatButtonTextStyle: TextStyle(
+                      color: colorScheme.onPrimary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
                     ),
-                    shape: BoxShape.rectangle,
-                  ),
-                  
-                  // 周末装饰
-                  weekendDecoration: BoxDecoration(
-                    border: Border.all(
-                      color: colorScheme.outline.withValues(alpha: 0.2),
-                      width: 0.5,
+                    titleTextStyle: TextStyle(
+                      color: colorScheme.onSurface,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
                     ),
-                    shape: BoxShape.rectangle,
+                    leftChevronIcon: Icon(
+                      Icons.chevron_left,
+                      color: colorScheme.onSurface,
+                    ),
+                    rightChevronIcon: Icon(
+                      Icons.chevron_right,
+                      color: colorScheme.onSurface,
+                    ),
                   ),
                   
-                  // 标记样式（为后续功能预留）
-                  markersMaxCount: 0, // 暂时隐藏默认标记，后续自定义
-                ),
-                
-                // 头部样式（星期标题）
-                headerStyle: HeaderStyle(
-                  // 格式按钮样式
-                  formatButtonVisible: true,
-                  formatButtonShowsNext: false,
-                  formatButtonDecoration: BoxDecoration(
-                    color: colorScheme.primary,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  formatButtonTextStyle: TextStyle(
-                    color: colorScheme.onPrimary,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                  // 星期标题样式
+                  daysOfWeekStyle: DaysOfWeekStyle(
+                    weekdayStyle: TextStyle(
+                      color: colorScheme.onSurface.withValues(alpha: 0.7),
+                      fontWeight: FontWeight.w500,
+                    ),
+                    weekendStyle: TextStyle(
+                      color: colorScheme.error.withValues(alpha: 0.7),
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                   
-                  // 标题样式
-                  titleTextStyle: TextStyle(
-                    color: colorScheme.onSurface,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
+                  // 自定义日期单元格构建器
+                  calendarBuilders: CalendarBuilders(
+                    // 默认日期单元格
+                    defaultBuilder: (context, day, focusedDay) {
+                      return _buildDateCell(context, day, false, false);
+                    },
+                    
+                    // 选中日期的单元格
+                    selectedBuilder: (context, day, focusedDay) {
+                      return _buildDateCell(context, day, false, true);
+                    },
+                    
+                    // 今天的日期单元格
+                    todayBuilder: (context, day, focusedDay) {
+                      final isSelected = isSameDay(_selectedDay, day);
+                      return _buildDateCell(context, day, true, isSelected);
+                    },
+                    
+                    // 周末日期单元格
+                    outsideBuilder: (context, day, focusedDay) {
+                      return _buildDateCell(context, day, false, false, isOutside: true);
+                    },
                   ),
-                  
-                  // 左右箭头样式
-                  leftChevronIcon: Icon(
-                    Icons.chevron_left,
-                    color: colorScheme.onSurface,
-                  ),
-                  rightChevronIcon: Icon(
-                    Icons.chevron_right,
-                    color: colorScheme.onSurface,
-                  ),
-                ),
-                
-                // 星期标题样式
-                daysOfWeekStyle: DaysOfWeekStyle(
-                  weekdayStyle: TextStyle(
-                    color: colorScheme.onSurface.withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w500,
-                  ),
-                  weekendStyle: TextStyle(
-                    color: colorScheme.error.withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                
-                // 自定义日期单元格构建器
-                calendarBuilders: CalendarBuilders(
-                  // 默认日期单元格
-                  defaultBuilder: (context, day, focusedDay) {
-                    return _buildDateCell(context, day, false, false);
-                  },
-                  
-                  // 今天的单元格
-                  todayBuilder: (context, day, focusedDay) {
-                    return _buildDateCell(context, day, true, false);
-                  },
-                  
-                  // 选中日期的单元格
-                  selectedBuilder: (context, day, focusedDay) {
-                    return _buildDateCell(context, day, false, true);
-                  },
-                  
-                  // 周末日期单元格
-                  outsideBuilder: (context, day, focusedDay) {
-                    return _buildDateCell(context, day, false, false, isOutside: true);
-                  },
                 ),
               ),
             ),
-          ),
-          
-          // 选中日期信息显示区域
-          if (_selectedDay != null) ...[
-            const SizedBox(height: 16),
-            _buildSelectedDateInfo(),
+            // 标签管理面板
+            TagManagementPanel(
+              key: ValueKey('${_selectedDay?.millisecondsSinceEpoch ?? 0}_$_dataRefreshCounter'),
+              selectedDate: _selectedDay ?? DateTime.now(),
+              focusedTag: _focusedTag,
+              onTagTap: _handleTagTap,
+              onTagLongPress: _handleTagLongPress,
+              onTagVisibilityChanged: _handleTagVisibilityChanged,
+            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -273,36 +309,292 @@ class _CalendarScreenState extends State<CalendarScreen> {
         _selectedDay = selectedDay;
         _focusedDay = focusedDay;
       });
-      
-      // 这里可以添加日期选择的回调处理
-      // 比如加载该日期的标签数据等
-      _onDateChanged(selectedDay);
+      debugPrint('选中日期: ${selectedDay.toString().split(' ')[0]}');
     }
   }
 
-  /// 回到今天
-  void _goToToday() {
-    final today = DateTime.now();
-    setState(() {
-      _selectedDay = today;
-      _focusedDay = today;
+  /// 加载标签和记录数据
+  Future<void> _loadTagsAndRecords() async {
+    try {
+      // 加载所有激活的标签
+      final allTags = await _tagRepository.findActive();
+      _allTags = allTags;
+      
+      // 检查是否需要重新加载数据
+      final currentMonth = DateTime(_focusedDay.year, _focusedDay.month);
+      final needsReload = _shouldReloadData(currentMonth);
+      
+      if (needsReload) {
+        debugPrint('重新加载月份数据: ${currentMonth.year}-${currentMonth.month}');
+        await _loadMonthData(currentMonth);
+      }
+      
+      setState(() {});
+    } catch (e) {
+      debugPrint('加载数据失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('数据加载失败，请稍后重试'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+  
+  /// 检查是否需要重新加载数据
+  bool _shouldReloadData(DateTime currentMonth) {
+    return _cachedMonth == null || 
+           _cachedMonth!.year != currentMonth.year || 
+           _cachedMonth!.month != currentMonth.month ||
+           _allTags.isEmpty;
+  }
+  
+  /// 加载指定月份的数据
+  Future<void> _loadMonthData(DateTime month) async {
+    // 清空当前月份的缓存
+    _recordCache.clear();
+    _tagRecords.clear();
+    
+    // 计算月份范围
+    final startOfMonth = DateTime(month.year, month.month, 1);
+    final endOfMonth = DateTime(month.year, month.month + 1, 0);
+    
+    // 批量加载所有标签的记录数据
+    final futures = _allTags.map((tag) async {
+      try {
+        final records = await _recordRepository.findByTagAndDateRange(
+          tag.id,
+          startOfMonth,
+          endOfMonth,
+        );
+        
+        // 更新记录列表
+        _tagRecords[tag.id] = records;
+        
+        // 构建日期索引缓存
+        final recordMap = <String, TagRecord>{};
+        for (final record in records) {
+          final dateKey = _getDateKey(record.date);
+          recordMap[dateKey] = record;
+        }
+        _recordCache[tag.id] = recordMap;
+        
+        return records.length;
+      } catch (e) {
+        debugPrint('加载标签 ${tag.name} 的数据失败: $e');
+        _tagRecords[tag.id] = [];
+        _recordCache[tag.id] = {};
+        return 0;
+      }
     });
-    _onDateChanged(today);
+    
+    // 等待所有数据加载完成
+    final recordCounts = await Future.wait(futures);
+    final totalRecords = recordCounts.fold<int>(0, (sum, count) => sum + count);
+    
+    debugPrint('加载完成: ${_allTags.length} 个标签，$totalRecords 条记录');
+    _cachedMonth = month;
+  }
+  
+  /// 生成日期缓存键
+  String _getDateKey(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+  
+  /// 快速获取指定日期的标签记录
+  TagRecord? _getRecordForDate(String tagId, DateTime date) {
+    final dateKey = _getDateKey(date);
+    return _recordCache[tagId]?[dateKey];
   }
 
-  /// 日期变化处理
-  void _onDateChanged(DateTime date) {
-    // 这里是日期选择的核心逻辑
-    // 后续会在这里加载对应日期的标签数据
-    debugPrint('选中日期: ${date.toString().split(' ')[0]}');
+  /// 处理背景点击
+  void _handleBackgroundTap() {
+    if (_focusedTag != null) {
+      setState(() {
+        _focusedTag = null;
+        debugPrint('点击空白处，取消聚焦模式');
+      });
+    }
   }
 
-  /// 构建台历式日期单元格
+  /// 处理标签点击（单标签聚焦模式）
+  void _handleTagTap(Tag tag) {
+    debugPrint('标签点击: ${tag.name}');
+    
+    setState(() {
+      // 如果点击的是当前聚焦的标签，则取消聚焦
+      if (_focusedTag?.id == tag.id) {
+        _focusedTag = null;
+        debugPrint('取消聚焦模式');
+      } else {
+        // 否则聚焦到该标签
+        _focusedTag = tag;
+        debugPrint('聚焦到标签: ${tag.name}');
+      }
+    });
+  }
+
+  /// 处理标签长按
+  void _handleTagLongPress(Tag tag) {
+    debugPrint('标签长按: ${tag.name}');
+    
+    // 检查标签类型，当前只支持量化标签
+    if (!tag.type.isQuantitative) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${tag.type.displayName}功能将在后续版本中提供'),
+          backgroundColor: Theme.of(context).colorScheme.secondary,
+        ),
+      );
+      return;
+    }
+    
+    _showTagValueDialog(tag);
+  }
+
+  /// 处理标签可见性变化
+  void _handleTagVisibilityChanged(Tag tag, bool isVisible) {
+    debugPrint('标签可见性变化: ${tag.name} -> $isVisible');
+  }
+
+  /// 显示标签数值修改对话框
+  Future<void> _showTagValueDialog(Tag tag) async {
+    final selectedDate = _selectedDay ?? DateTime.now();
+    
+    try {
+      // 查找当日该标签的记录
+      final existingRecord = await _recordRepository.findByTagAndDate(tag.id, selectedDate);
+      
+      // 显示对话框
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => TagValueDialog(
+            tag: tag,
+            currentValue: existingRecord?.value,
+            showDeleteButton: existingRecord != null,
+            onConfirm: (value) => _saveTagRecord(tag, selectedDate, value),
+            onDelete: existingRecord != null 
+                ? () => _deleteTagRecord(existingRecord) 
+                : null,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('显示标签对话框失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('加载标签数据失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 保存标签记录
+  Future<void> _saveTagRecord(Tag tag, DateTime date, dynamic value) async {
+    try {
+      // 查找是否已有记录
+      final existingRecord = await _recordRepository.findByTagAndDate(tag.id, date);
+      
+      if (existingRecord != null) {
+        // 更新现有记录
+        final updatedRecord = existingRecord.copyWith(
+          value: value,
+          updatedAt: DateTime.now(),
+        );
+        await _recordRepository.update(updatedRecord);
+        debugPrint('更新标签记录: ${tag.name} = $value');
+      } else {
+        // 创建新记录
+        final newRecord = TagRecord(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          tagId: tag.id,
+          date: date,
+          value: value,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+        await _recordRepository.insert(newRecord);
+        debugPrint('创建标签记录: ${tag.name} = $value');
+      }
+      
+      // 重新加载数据以更新界面
+      await _loadTagsAndRecords();
+      
+      // 触发界面刷新
+      setState(() {
+        _dataRefreshCounter++;
+      });
+      
+      // 显示成功提示
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已保存 ${tag.name} 的记录'),
+            backgroundColor: Theme.of(context).colorScheme.primary,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('保存标签记录失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('保存失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 删除标签记录
+  Future<void> _deleteTagRecord(TagRecord record) async {
+    try {
+      await _recordRepository.deleteById(record.id);
+      debugPrint('删除标签记录: ${record.id}');
+      
+      // 重新加载数据以更新界面
+      await _loadTagsAndRecords();
+      
+      // 触发界面刷新
+      setState(() {
+        _dataRefreshCounter++;
+      });
+      
+      // 显示成功提示
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已删除记录'),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('删除标签记录失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('删除失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 构建日期单元格（重构版本）
   /// 
-  /// [day] 日期
-  /// [isToday] 是否是今天
-  /// [isSelected] 是否被选中
-  /// [isOutside] 是否是月外日期
+  /// 新的设计思路：
+  /// 1. 统一的背景色策略
+  /// 2. 清晰的模式分离
+  /// 3. 简化的条件判断
   Widget _buildDateCell(
     BuildContext context, 
     DateTime day, 
@@ -313,30 +605,64 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     
-    // 确定文本颜色
-    Color textColor;
-    if (isOutside) {
-      textColor = colorScheme.onSurface.withValues(alpha: 0.3);
-    } else if (day.weekday == DateTime.saturday || day.weekday == DateTime.sunday) {
-      textColor = colorScheme.error;
-    } else {
-      textColor = colorScheme.onSurface;
-    }
-    
-    // 确定背景和边框
+    // 1. 确定背景色和边框（统一策略）
     Color? backgroundColor;
     Border? border;
+    Color textColor;
     
-    if (isSelected) {
-      backgroundColor = colorScheme.primary.withValues(alpha: 0.2);
-      border = Border.all(color: colorScheme.primary, width: 2);
-    } else if (isToday) {
-      border = Border.all(color: colorScheme.primary, width: 2);
+    // 量化标签聚焦模式：特殊的背景色处理
+    if (_focusedTag != null && _focusedTag!.type.isQuantitative) {
+      final heatmapColor = _getQuantitativeHeatmapColor(day);
+      backgroundColor = heatmapColor;
+      
+      // 聚焦模式下也要考虑周末和月外日期的文字颜色
+      if (isOutside) {
+        textColor = HeatmapColors.getTextColor().withValues(alpha: HeatmapColors.focusedOutsideTextAlpha);
+      } else if (day.weekday == DateTime.saturday || day.weekday == DateTime.sunday) {
+        textColor = HeatmapColors.focusedWeekendTextColor;
+      } else {
+        textColor = HeatmapColors.getTextColor();
+      }
+      
+      // 选中状态使用加粗边框
+      if (isSelected) {
+        border = Border.all(
+          color: HeatmapColors.focusedSelectedBorderColor ?? colorScheme.primary, 
+          width: HeatmapColors.focusedSelectedBorderWidth,
+        );
+      } else {
+        border = Border.all(
+          color: HeatmapColors.focusedNormalBorderColor, 
+          width: HeatmapColors.focusedNormalBorderWidth,
+        );
+      }
     } else {
-      border = Border.all(
-        color: colorScheme.outline.withValues(alpha: 0.2),
-        width: 0.5,
-      );
+      // 普通模式和其他聚焦模式：统一的背景色策略
+      backgroundColor = HeatmapColors.getDefaultBackground();
+      
+      // 确定文本颜色
+      if (isOutside) {
+        textColor = colorScheme.onSurface.withValues(alpha: 0.3);
+      } else if (day.weekday == DateTime.saturday || day.weekday == DateTime.sunday) {
+        textColor = colorScheme.error;
+      } else {
+        textColor = colorScheme.onSurface;
+      }
+      
+      // 选中状态的特殊处理
+      if (isSelected) {
+        backgroundColor = colorScheme.primary.withValues(alpha: HeatmapColors.normalBorderAlpha);
+        border = Border.all(
+          color: colorScheme.primary, 
+          width: HeatmapColors.normalSelectedBorderWidth,
+        );
+        textColor = colorScheme.primary;
+      } else {
+        border = Border.all(
+          color: colorScheme.outline.withValues(alpha: HeatmapColors.normalBorderAlpha),
+          width: HeatmapColors.normalBorderWidth,
+        );
+      }
     }
     
     return Container(
@@ -347,57 +673,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
       ),
       child: Stack(
         children: [
-          // 日期数字 - 显示在左上角
+          // 日期数字
           Positioned(
             top: 4,
             left: 6,
             child: Text(
               '${day.day}',
               style: TextStyle(
-                color: isToday || isSelected ? colorScheme.primary : textColor,
+                color: textColor,
                 fontSize: 14,
-                fontWeight: isToday || isSelected ? FontWeight.w600 : FontWeight.normal,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
               ),
             ),
           ),
           
-          // 农历显示区域（预留，后续可添加）
-          // Positioned(
-          //   top: 4,
-          //   right: 6,
-          //   child: Text(
-          //     '初一', // 示例农历
-          //     style: TextStyle(
-          //       color: textColor.withValues(alpha: 0.6),
-          //       fontSize: 10,
-          //     ),
-          //   ),
-          // ),
-          
-          // 标签颜色标记区域 - 预留在底部
-          Positioned(
-            bottom: 2,
-            left: 2,
-            right: 2,
-            child: SizedBox(
-              height: 8,
-              child: Row(
-                children: [
-                  // 这里后续会显示标签的颜色条
-                  // 示例：不同颜色的小方块表示不同标签
-                  // Container(
-                  //   width: 6,
-                  //   height: 6,
-                  //   margin: EdgeInsets.only(right: 1),
-                  //   decoration: BoxDecoration(
-                  //     color: Colors.blue,
-                  //     borderRadius: BorderRadius.circular(1),
-                  //   ),
-                  // ),
-                ],
-              ),
-            ),
-          ),
+          // 2. 根据模式显示不同内容
+          ..._buildDateCellContent(day, textColor),
           
           // 点击区域
           Positioned.fill(
@@ -405,6 +696,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
               color: Colors.transparent,
               child: InkWell(
                 onTap: () => _onDaySelected(day, day),
+                onDoubleTap: () => _openDiaryInput(day),
                 borderRadius: BorderRadius.zero,
                 child: Container(),
               ),
@@ -414,92 +706,370 @@ class _CalendarScreenState extends State<CalendarScreen> {
       ),
     );
   }
-
-  /// 构建选中日期信息显示
-  Widget _buildSelectedDateInfo() {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
+  
+  /// 构建日期单元格内容（根据模式）
+  List<Widget> _buildDateCellContent(DateTime day, Color textColor) {
+    if (_focusedTag == null) {
+      // 普通模式：显示所有标签的小指示器
+      return [
+        Positioned(
+          bottom: 2,
+          left: 2,
+          right: 2,
+          child: SizedBox(
+            height: 16,
+            child: _buildMultiTagIndicators(day),
+          ),
+        ),
+      ];
+    } else {
+      // 聚焦模式：根据标签类型显示不同内容
+      return _buildFocusedModeContent(day, textColor);
+    }
+  }
+  
+  /// 构建聚焦模式内容
+  List<Widget> _buildFocusedModeContent(DateTime day, Color textColor) {
+    final record = _getRecordForDate(_focusedTag!.id, day);
     
-    // 格式化选中的日期
-    final selectedDate = _selectedDay!;
-    final year = selectedDate.year;
-    final month = selectedDate.month;
-    final day = selectedDate.day;
+    if (_focusedTag!.type.isQuantitative) {
+      // 量化标签：显示数值（背景色已在_buildDateCell中处理）
+      if (record?.numericValue != null) {
+        final displayValue = _formatQuantitativeValue(record!.numericValue!, _focusedTag!);
+        return [
+          Positioned(
+            bottom: 4,
+            right: 6,
+            child: Text(
+              displayValue,
+              style: TextStyle(
+                color: textColor,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ];
+      }
+    } else if (_focusedTag!.type.isBinary) {
+      // 非量化标签：显示标记
+      if (record?.booleanValue == true) {
+        return [_buildBinaryMarker(day)];
+      }
+    }
+    // 复杂标签：暂不显示任何内容
     
-    // 获取星期
-    final weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-    final weekday = weekdays[selectedDate.weekday - 1];
+    return [];
+  }
+  
+  /// 获取量化标签的热力图颜色
+  Color _getQuantitativeHeatmapColor(DateTime day) {
+    final record = _getRecordForDate(_focusedTag!.id, day);
+    
+    if (record?.numericValue == null) {
+      return HeatmapColors.getNoDataColor();
+    }
+    
+    // 计算强度值
+    final minValue = _focusedTag!.quantitativeMinValue ?? 1.0;
+    final maxValue = _focusedTag!.quantitativeMaxValue ?? 10.0;
+    final value = record!.numericValue!;
+    final normalizedValue = ((value - minValue) / (maxValue - minValue)).clamp(0.0, 1.0);
+    
+    // 使用增强对比度算法
+    final intensity = _enhanceContrast(normalizedValue);
+    
+    return HeatmapColors.getColorForIntensity(intensity);
+  }
+  
+  /// 增强对比度的非线性映射函数
+  double _enhanceContrast(double normalizedValue) {
+    if (normalizedValue < 0.5) {
+      // 低值区间：使用平方根增强区分度
+      return 0.5 * math.sqrt(normalizedValue * 2);
+    } else {
+      // 高值区间：使用平方函数增强区分度
+      final adjustedValue = (normalizedValue - 0.5) * 2;
+      return 0.5 + 0.5 * (adjustedValue * adjustedValue);
+    }
+  }
+  
+  /// 格式化量化标签数值
+  String _formatQuantitativeValue(double value, Tag tag) {
+    // 获取标签单位
+    final unit = tag.quantitativeUnit;
+    
+    // 智能格式化数值
+    String valueText;
+    if (value % 1 == 0) {
+      valueText = value.toInt().toString();
+    } else if (value < 10) {
+      valueText = value.toStringAsFixed(1);
+    } else {
+      valueText = value.toStringAsFixed(0);
+    }
+    
+    // 添加单位（如果有且不会太长）
+    if (unit != null && unit.length <= 2 && valueText.length <= 3) {
+      return '$valueText$unit';
+    }
+    
+    return valueText;
+  }
+  
+  /// 构建非量化标签的标记
+  Widget _buildBinaryMarker(DateTime day) {
+    // 解析标签颜色
+    Color tagColor;
+    try {
+      tagColor = Color(int.parse(_focusedTag!.color.replaceFirst('#', '0xFF')));
+    } catch (e) {
+      tagColor = Theme.of(context).colorScheme.primary;
+    }
+    
+    return Positioned(
+      bottom: 4,
+      right: 6,
+      child: Container(
+        width: 12,
+        height: 12,
+        decoration: BoxDecoration(
+          color: tagColor,
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(
+          Icons.check,
+          color: Colors.white,
+          size: 8,
+        ),
+      ),
+    );
+  }
+  
+  /// 构建多标签指示器（普通模式）
+  Widget _buildMultiTagIndicators(DateTime day) {
+    final List<Widget> tagIndicators = [];
+    
+    // 获取当日有记录的标签，按重要性排序
+    final tagsWithRecords = <Tag, TagRecord>{};
+    for (final tag in _allTags) {
+      final dayRecord = _getRecordForDate(tag.id, day);
+      if (dayRecord != null && dayRecord.hasValue) {
+        tagsWithRecords[tag] = dayRecord;
+      }
+    }
+    
+    if (tagsWithRecords.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    // 按标签类型和数值重要性排序
+    final sortedEntries = tagsWithRecords.entries.toList()
+      ..sort((a, b) {
+        // 优先显示量化标签，然后按数值大小排序
+        if (a.key.type.isQuantitative && b.key.type.isQuantitative) {
+          final aValue = a.value.numericValue ?? 0;
+          final bValue = b.value.numericValue ?? 0;
+          return bValue.compareTo(aValue); // 降序，高数值优先
+        } else if (a.key.type.isQuantitative) {
+          return -1; // 量化标签优先
+        } else if (b.key.type.isQuantitative) {
+          return 1;
+        }
+        return a.key.name.compareTo(b.key.name); // 其他按名称排序
+      });
+    
+    // 动态计算最大显示数量
+    const maxIndicators = 6;
+    final displayCount = sortedEntries.length > maxIndicators ? maxIndicators - 1 : sortedEntries.length;
+    
+    // 构建标签指示器
+    for (int i = 0; i < displayCount; i++) {
+      final entry = sortedEntries[i];
+      final indicator = _buildTagIndicator(entry.key, entry.value);
+      if (indicator != null) {
+        tagIndicators.add(indicator);
+      }
+    }
+    
+    // 如果有更多标签，显示省略指示器
+    final remainingCount = sortedEntries.length - displayCount;
+    if (remainingCount > 0) {
+      tagIndicators.add(
+        Container(
+          width: 10,
+          height: 6,
+          margin: const EdgeInsets.only(left: 1),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(2),
+          ),
+          child: Center(
+            child: Text(
+              '+$remainingCount',
+              style: TextStyle(
+                fontSize: 7,
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    
+    return Wrap(
+      spacing: 1.5,
+      runSpacing: 1,
+      children: tagIndicators,
+    );
+  }
+  
+  /// 构建单个标签指示器
+  Widget? _buildTagIndicator(Tag tag, TagRecord record) {
+    // 解析标签颜色
+    Color tagColor;
+    try {
+      tagColor = Color(int.parse(tag.color.replaceFirst('#', '0xFF')));
+    } catch (e) {
+      tagColor = Theme.of(context).colorScheme.primary;
+    }
+    
+    // 根据标签类型构建不同的指示器
+    if (tag.type.isQuantitative && record.numericValue != null) {
+      return _buildQuantitativeIndicator(tag, record, tagColor);
+    } else if (tag.type.isBinary && record.booleanValue != null) {
+      return _buildBinaryIndicator(tag, record, tagColor);
+    } else if (tag.type.isComplex && record.listValue.isNotEmpty) {
+      return _buildComplexIndicator(tag, record, tagColor);
+    }
+    
+    return null;
+  }
+  
+  /// 构建量化标签指示器
+  Widget _buildQuantitativeIndicator(Tag tag, TagRecord record, Color tagColor) {
+    final minValue = tag.quantitativeMinValue ?? 1.0;
+    final maxValue = tag.quantitativeMaxValue ?? 10.0;
+    final value = record.numericValue!;
+    
+    // 使用非线性映射增强对比度
+    final normalizedValue = ((value - minValue) / (maxValue - minValue)).clamp(0.0, 1.0);
+    final intensity = _enhanceContrast(normalizedValue);
+    
+    // 动态颜色计算
+    final alpha = 0.3 + intensity * 0.7;
+    final backgroundColor = tagColor.withValues(alpha: alpha);
+    
+    // 高强度值添加边框
+    final shouldAddBorder = intensity > 0.6;
     
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              // 日期图标
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: colorScheme.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  Icons.calendar_today,
-                  color: colorScheme.primary,
-                  size: 24,
-                ),
-              ),
-              
-              const SizedBox(width: 16),
-              
-              // 日期信息
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '$year年$month月$day日',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: colorScheme.onSurface,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      weekday,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: colorScheme.onSurface.withValues(alpha: 0.7),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              
-              // 是否是今天的标识
-              if (isSameDay(selectedDate, DateTime.now()))
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colorScheme.primary,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '今天',
-                    style: TextStyle(
-                      color: colorScheme.onPrimary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-            ],
+      width: 7,
+      height: 7,
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(1.5),
+        border: shouldAddBorder ? Border.all(
+          color: tagColor.withValues(alpha: 0.9),
+          width: 0.5,
+        ) : null,
+        // 高强度值添加阴影
+        boxShadow: intensity > 0.8 ? [
+          BoxShadow(
+            color: tagColor.withValues(alpha: 0.4),
+            blurRadius: 1,
+            offset: const Offset(0, 0.5),
+          ),
+        ] : null,
+      ),
+    );
+  }
+  
+  /// 构建非量化标签指示器
+  Widget _buildBinaryIndicator(Tag tag, TagRecord record, Color tagColor) {
+    final isActive = record.booleanValue == true;
+    
+    return Container(
+      width: 7,
+      height: 7,
+      decoration: BoxDecoration(
+        color: isActive ? tagColor.withValues(alpha: 0.9) : tagColor.withValues(alpha: 0.2),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: isActive ? tagColor : tagColor.withValues(alpha: 0.5),
+          width: isActive ? 0.8 : 0.5,
+        ),
+        // 激活状态添加阴影
+        boxShadow: isActive ? [
+          BoxShadow(
+            color: tagColor.withValues(alpha: 0.3),
+            blurRadius: 1,
+            offset: const Offset(0, 0.5),
+          ),
+        ] : null,
+      ),
+      // 激活状态显示小勾号
+      child: isActive ? const Icon(
+        Icons.check,
+        size: 4,
+        color: Colors.white,
+      ) : null,
+    );
+  }
+  
+  /// 构建复杂标签指示器
+  Widget _buildComplexIndicator(Tag tag, TagRecord record, Color tagColor) {
+    final subTagCount = record.listValue.length;
+    final maxSubTags = tag.complexSubTags.length;
+    final intensity = maxSubTags > 0 ? (subTagCount / maxSubTags).clamp(0.0, 1.0) : 0.5;
+    
+    // 使用增强对比度算法
+    final enhancedIntensity = _enhanceContrast(intensity);
+    
+    return Container(
+      width: 8,
+      height: 7,
+      decoration: BoxDecoration(
+        color: tagColor.withValues(alpha: 0.3 + enhancedIntensity * 0.6),
+        borderRadius: BorderRadius.circular(2),
+        border: Border.all(
+          color: tagColor.withValues(alpha: 0.7 + enhancedIntensity * 0.3),
+          width: 0.5,
+        ),
+        // 高复杂度添加阴影
+        boxShadow: enhancedIntensity > 0.7 ? [
+          BoxShadow(
+            color: tagColor.withValues(alpha: 0.3),
+            blurRadius: 1,
+            offset: const Offset(0, 0.5),
+          ),
+        ] : null,
+      ),
+      child: Center(
+        child: Text(
+          '$subTagCount',
+          style: TextStyle(
+            fontSize: 6,
+            color: enhancedIntensity > 0.5 ? Colors.white : tagColor,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ),
     );
+  }
+
+  /// 打开日记输入界面
+  Future<void> _openDiaryInput(DateTime date) async {
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => DiaryInputScreen(selectedDate: date),
+      ),
+    );
+    
+    // 如果有数据变更，重新加载数据
+    if (result == true) {
+      _loadTagsAndRecords();
+    }
   }
 }

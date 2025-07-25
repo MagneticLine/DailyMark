@@ -411,10 +411,151 @@ class _AddEditTagScreenState extends State<AddEditTagScreen> {
                 border: OutlineInputBorder(),
               ),
             ),
+            const SizedBox(height: 16),
+            _buildQuantitativeLabelsSection(),
           ],
         ),
       ),
     );
+  }
+
+  /// 构建量化标签的文字标签部分
+  Widget _buildQuantitativeLabelsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              '文字标签（可选）',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Tooltip(
+              message: '为数值范围添加文字描述，如：1-3分对应"差"，4-7分对应"良"，8-10分对应"优"',
+              child: Icon(
+                Icons.help_outline,
+                size: 16,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (_quantitativeLabels.isNotEmpty) ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _quantitativeLabels.asMap().entries.map((entry) {
+              final index = entry.key;
+              final label = entry.value;
+              return Chip(
+                label: Text('${index + 1}. $label'),
+                deleteIcon: const Icon(Icons.close, size: 18),
+                onDeleted: () => _removeQuantitativeLabel(index),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Row(
+          children: [
+            Expanded(
+              child: TextFormField(
+                decoration: const InputDecoration(
+                  labelText: '添加文字标签',
+                  hintText: '如：差、良、优',
+                  border: OutlineInputBorder(),
+                ),
+                onFieldSubmitted: _addQuantitativeLabel,
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: () {
+                final controller = TextEditingController();
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('添加文字标签'),
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextField(
+                          controller: controller,
+                          decoration: const InputDecoration(
+                            labelText: '标签名称',
+                            hintText: '如：差、良、优',
+                          ),
+                          autofocus: true,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '将按顺序对应数值范围',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                        ),
+                      ],
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('取消'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          _addQuantitativeLabel(controller.text);
+                          Navigator.of(context).pop();
+                        },
+                        child: const Text('添加'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              child: const Text('添加'),
+            ),
+          ],
+        ),
+        if (_quantitativeLabels.isEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.3),
+              ),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '可以为数值范围添加文字描述，让标签更直观易懂',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 添加量化标签的文字标签
+  void _addQuantitativeLabel(String label) {
+    final trimmed = label.trim();
+    if (trimmed.isNotEmpty) {
+      setState(() {
+        _quantitativeLabels.add(trimmed);
+      });
+    }
+  }
+
+  /// 移除量化标签的文字标签
+  void _removeQuantitativeLabel(int index) {
+    setState(() {
+      _quantitativeLabels.removeAt(index);
+    });
   }
 
   /// 构建非量化标签配置

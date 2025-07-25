@@ -24,6 +24,7 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
   bool _isLoading = true;
   String _searchQuery = '';
   TagType? _selectedTypeFilter;
+  bool _hasDataChanged = false; // 跟踪数据是否有变更
 
   @override
   void initState() {
@@ -103,6 +104,7 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
     );
     
     if (result == true) {
+      _hasDataChanged = true; // 标记数据已变更
       _loadTags(); // 重新加载标签列表
     }
   }
@@ -116,6 +118,7 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
     );
     
     if (result == true) {
+      _hasDataChanged = true; // 标记数据已变更
       _loadTags(); // 重新加载标签列表
     }
   }
@@ -146,6 +149,7 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
     if (confirmed == true) {
       try {
         await _tagRepository.softDelete(tag.id);
+        _hasDataChanged = true; // 标记数据已变更
         _loadTags(); // 重新加载标签列表
         
         if (mounted) {
@@ -165,10 +169,20 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
-
-    return Scaffold(
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        // 这里不需要额外处理，因为我们会在AppBar的返回按钮中处理
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: const Text('标签管理'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            Navigator.of(context).pop(_hasDataChanged);
+          },
+        ),
         actions: [
           // 添加标签按钮
           IconButton(
@@ -199,6 +213,7 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
         onPressed: _addNewTag,
         tooltip: '添加标签',
         child: const Icon(Icons.add),
+      ),
       ),
     );
   }

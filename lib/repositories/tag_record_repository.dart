@@ -61,6 +61,27 @@ class TagRecordRepository extends BaseRepository<TagRecord> {
     return records.isNotEmpty ? records.first : null;
   }
 
+  /// 根据标签ID和日期查询记录（别名方法，用于兼容）
+  Future<TagRecord?> findByTagAndDate(String tagId, DateTime date) async {
+    return await findByTagIdAndDate(tagId, date);
+  }
+
+  /// 根据标签ID和日期范围查询记录
+  Future<List<TagRecord>> findByTagAndDateRange(
+    String tagId,
+    DateTime startDate,
+    DateTime endDate,
+  ) async {
+    final startDateStr = startDate.toIso8601String().split('T')[0];
+    final endDateStr = endDate.toIso8601String().split('T')[0];
+    
+    return await findWhere(
+      where: 'tag_id = ? AND date >= ? AND date <= ?',
+      whereArgs: [tagId, startDateStr, endDateStr],
+      orderBy: 'date ASC',
+    );
+  }
+
   /// 查询预测记录
   Future<List<TagRecord>> findPredictions({
     String? tagId,
