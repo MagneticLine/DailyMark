@@ -4,10 +4,11 @@ import '../models/models.dart';
 
 /// 标签数值修改弹窗组件
 /// 
-/// 当前版本只支持量化标签：
+/// 支持的标签类型：
 /// - 量化标签：数值输入或滑块选择
+/// - 非量化标签：开关切换
 /// 
-/// 注意：非量化标签和复杂标签将在后续版本中支持
+/// 注意：复杂标签将在后续版本中支持
 class TagValueDialog extends StatefulWidget {
   /// 要修改的标签
   final Tag tag;
@@ -59,71 +60,87 @@ class _TagValueDialogState extends State<TagValueDialog> {
     super.dispose();
   }
 
-  /// 初始化值（当前只支持量化标签）
+  /// 初始化值
   void _initializeValue() {
-    // 检查标签类型，当前只支持量化标签
-    if (!widget.tag.type.isQuantitative) {
-      throw UnsupportedError('当前版本只支持量化标签，${widget.tag.type.displayName}将在后续版本中支持');
+    // 检查标签类型，当前支持量化标签和非量化标签
+    if (widget.tag.type.isComplex) {
+      throw UnsupportedError('复杂标签将在后续版本中支持');
     }
     
-    if (_currentValue is num) {
-      _textController.text = _currentValue.toString();
-    } else {
-      // 使用中间值作为默认值
-      final minValue = widget.tag.quantitativeMinValue ?? 1.0;
-      final maxValue = widget.tag.quantitativeMaxValue ?? 10.0;
-      final defaultValue = (minValue + maxValue) / 2;
-      _currentValue = defaultValue;
-      _textController.text = defaultValue.toString();
+    if (widget.tag.type.isQuantitative) {
+      // 量化标签初始化
+      if (_currentValue is num) {
+        _textController.text = _currentValue.toString();
+      } else {
+        // 使用中间值作为默认值
+        final minValue = widget.tag.quantitativeMinValue ?? 1.0;
+        final maxValue = widget.tag.quantitativeMaxValue ?? 10.0;
+        final defaultValue = (minValue + maxValue) / 2;
+        _currentValue = defaultValue;
+        _textController.text = defaultValue.toString();
+      }
+    } else if (widget.tag.type.isBinary) {
+      // 非量化标签初始化
+      if (_currentValue is bool) {
+        // 保持当前值
+      } else {
+        // 默认为false
+        _currentValue = false;
+      }
     }
   }
 
-  /// 验证输入值（当前只支持量化标签）
+  /// 验证输入值
   bool _validateInput() {
     setState(() {
       _isValid = true;
       _errorMessage = null;
     });
 
-    // 只处理量化标签
-    if (!widget.tag.type.isQuantitative) {
+    if (widget.tag.type.isComplex) {
       setState(() {
         _isValid = false;
-        _errorMessage = '当前版本只支持量化标签';
+        _errorMessage = '复杂标签暂不支持';
       });
       return false;
     }
     
-    final text = _textController.text.trim();
-    if (text.isEmpty) {
-      setState(() {
-        _isValid = false;
-        _errorMessage = '请输入数值';
-      });
-      return false;
+    if (widget.tag.type.isQuantitative) {
+      // 量化标签验证
+      final text = _textController.text.trim();
+      if (text.isEmpty) {
+        setState(() {
+          _isValid = false;
+          _errorMessage = '请输入数值';
+        });
+        return false;
+      }
+      
+      final value = double.tryParse(text);
+      if (value == null) {
+        setState(() {
+          _isValid = false;
+          _errorMessage = '请输入有效的数值';
+        });
+        return false;
+      }
+      
+      final minValue = widget.tag.quantitativeMinValue ?? double.negativeInfinity;
+      final maxValue = widget.tag.quantitativeMaxValue ?? double.infinity;
+      
+      if (value < minValue || value > maxValue) {
+        setState(() {
+          _isValid = false;
+          _errorMessage = '数值应在 $minValue - $maxValue 之间';
+        });
+        return false;
+      }
+      
+      _currentValue = value;
+    } else if (widget.tag.type.isBinary) {
+      // 非量化标签不需要特殊验证，_currentValue已经是bool类型
     }
     
-    final value = double.tryParse(text);
-    if (value == null) {
-      setState(() {
-        _isValid = false;
-        _errorMessage = '请输入有效的数值';
-      });
-      return false;
-    }
-    
-    final minValue = widget.tag.quantitativeMinValue ?? double.negativeInfinity;
-    final maxValue = widget.tag.quantitativeMaxValue ?? double.infinity;
-    
-    if (value < minValue || value > maxValue) {
-      setState(() {
-        _isValid = false;
-        _errorMessage = '数值应在 $minValue - $maxValue 之间';
-      });
-      return false;
-    }
-    
-    _currentValue = value;
     return true;
   }
 
@@ -235,9 +252,9 @@ class _TagValueDialogState extends State<TagValueDialog> {
     );
   }
 
-  /// 构建输入组件（当前只支持量化标签）
+  /// 构建输入组件
   Widget _buildInputWidget() {
-    if (!widget.tag.type.isQuantitative) {
+    if (widget.tag.type.isComplex) {
       return Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -270,7 +287,13 @@ class _TagValueDialogState extends State<TagValueDialog> {
       );
     }
     
-    return _buildQuantitativeInput();
+    if (widget.tag.type.isQuantitative) {
+      return _buildQuantitativeInput();
+    } else if (widget.tag.type.isBinary) {
+      return _buildBinaryInput();
+    }
+    
+    return const SizedBox.shrink();
   }
 
   /// 构建量化标签输入界面
@@ -365,9 +388,106 @@ class _TagValueDialogState extends State<TagValueDialog> {
     }
   }
 
-  /// 获取确认按钮文本（当前只支持量化标签）
+  /// 构建非量化标签输入界面
+  Widget _buildBinaryInput() {
+    final icon = widget.tag.binaryIcon ?? '✓';
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '设置标签状态',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 16),
+        
+        // 开关控件
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outline.withOpacity(0.5),
+            ),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              // 图标显示
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: (_currentValue as bool) 
+                      ? _getTagColor().withOpacity(0.2)
+                      : Colors.grey.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: (_currentValue as bool) 
+                        ? _getTagColor()
+                        : Colors.grey,
+                    width: 2,
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    (_currentValue as bool) ? icon : '',
+                    style: TextStyle(
+                      fontSize: 20,
+                      color: (_currentValue as bool) 
+                          ? _getTagColor()
+                          : Colors.grey,
+                    ),
+                  ),
+                ),
+              ),
+              
+              const SizedBox(width: 16),
+              
+              // 状态文本和开关
+              Expanded(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.tag.name,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        Text(
+                          (_currentValue as bool) ? '已完成' : '未完成',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: (_currentValue as bool) 
+                                ? _getTagColor()
+                                : Colors.grey,
+                          ),
+                        ),
+                      ],
+                    ),
+                    
+                    Switch(
+                      value: _currentValue as bool,
+                      onChanged: (value) {
+                        setState(() {
+                          _currentValue = value;
+                        });
+                      },
+                      activeColor: _getTagColor(),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 获取确认按钮文本
   String _getConfirmButtonText() {
-    if (!widget.tag.type.isQuantitative) {
+    if (widget.tag.type.isComplex) {
       return '暂不支持';
     }
     return widget.currentValue == null ? '添加' : '确认';

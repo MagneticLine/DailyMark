@@ -34,7 +34,7 @@ class _AddEditTagScreenState extends State<AddEditTagScreen> {
   String _selectedColor = '#6366F1';
   bool _enablePrediction = false;
   int? _cycleDays;
-  List<String> _subTags = [];
+  List<Map<String, dynamic>> _subTags = []; // 改为包含类型信息的Map列表
   List<String> _quantitativeLabels = [];
   bool _isLoading = false;
 
@@ -92,7 +92,17 @@ class _AddEditTagScreenState extends State<AddEditTagScreen> {
           _iconController.text = tag.binaryIcon ?? '✓';
           break;
         case TagType.complex:
-          _subTags = List<String>.from(tag.complexSubTags);
+          // 尝试从配置中读取完整的子标签信息
+          if (tag.config.containsKey('subTagsConfig')) {
+            _subTags = List<Map<String, dynamic>>.from(tag.config['subTagsConfig']);
+          } else {
+            // 兼容旧版本，将字符串列表转换为包含类型信息的Map列表
+            _subTags = tag.complexSubTags.map((name) => {
+              'name': name,
+              'type': TagType.binary, // 默认类型
+              'config': {'icon': '✓'}, // 默认配置
+            }).toList();
+          }
           break;
       }
     } else {
@@ -130,7 +140,9 @@ class _AddEditTagScreenState extends State<AddEditTagScreen> {
           config['icon'] = _iconController.text.trim();
           break;
         case TagType.complex:
-          config['subTags'] = _subTags;
+          // 保存子标签的完整信息，包括类型和配置
+          config['subTags'] = _subTags.map((subTag) => subTag['name'] as String).toList();
+          config['subTagsConfig'] = _subTags; // 保存完整的子标签配置
           break;
       }
 
@@ -646,26 +658,14 @@ class _AddEditTagScreenState extends State<AddEditTagScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _subTagController,
-                    decoration: const InputDecoration(
-                      labelText: '子标签名称',
-                      hintText: '输入子标签名称',
-                      border: OutlineInputBorder(),
-                    ),
-                    onFieldSubmitted: _addSubTag,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () => _addSubTag(_subTagController.text),
-                  child: const Text('添加'),
-                ),
-              ],
+            
+            // 添加子标签按钮
+            ElevatedButton.icon(
+              onPressed: _showAddSubTagDialog,
+              icon: const Icon(Icons.add),
+              label: const Text('添加子标签'),
             ),
+            
             const SizedBox(height: 16),
             if (_subTags.isNotEmpty) ...[
               Text(
@@ -675,16 +675,54 @@ class _AddEditTagScreenState extends State<AddEditTagScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _subTags.map((subTag) {
-                  return Chip(
-                    label: Text(subTag),
-                    deleteIcon: const Icon(Icons.close, size: 18),
-                    onDeleted: () => _removeSubTag(subTag),
+              
+              // 子标签列表
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _subTags.length,
+                itemBuilder: (context, index) {
+                  final subTag = _subTags[index];
+                  final name = subTag['name'] as String;
+                  final type = subTag['type'] as TagType;
+                  final config = subTag['config'] as Map<String, dynamic>? ?? {};
+                  
+                  // 构建子标题，显示配置信息
+                  String subtitle = _getTypeDisplayName(type);
+                  if (type == TagType.quantitative && config.isNotEmpty) {
+                    final minValue = config['minValue']?.toString() ?? '1';
+                    final maxValue = config['maxValue']?.toString() ?? '10';
+                    final unit = config['unit']?.toString() ?? '';
+                    subtitle += ' • $minValue-$maxValue${unit.isNotEmpty ? unit : ''}';
+                  } else if (type == TagType.binary && config.isNotEmpty) {
+                    final icon = config['icon']?.toString() ?? '✓';
+                    subtitle += ' • $icon';
+                  }
+                  
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: ListTile(
+                      leading: Icon(_getTagTypeIcon(type)),
+                      title: Text(name),
+                      subtitle: Text(subtitle),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            onPressed: () => _editSubTag(index),
+                            icon: const Icon(Icons.edit),
+                            tooltip: '编辑',
+                          ),
+                          IconButton(
+                            onPressed: () => _removeSubTag(index),
+                            icon: const Icon(Icons.delete),
+                            tooltip: '删除',
+                          ),
+                        ],
+                      ),
+                    ),
                   );
-                }).toList(),
+                },
               ),
             ] else ...[
               Container(
@@ -697,7 +735,7 @@ class _AddEditTagScreenState extends State<AddEditTagScreen> {
                 ),
                 child: Center(
                   child: Text(
-                    '还没有添加子标签\n请在上方输入框中添加',
+                    '还没有添加子标签\n点击上方按钮添加子标签',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
@@ -818,22 +856,321 @@ class _AddEditTagScreenState extends State<AddEditTagScreen> {
     );
   }
 
-  /// 添加子标签
-  void _addSubTag(String subTag) {
-    final trimmed = subTag.trim();
-    if (trimmed.isNotEmpty && !_subTags.contains(trimmed)) {
-      setState(() {
-        _subTags.add(trimmed);
-        _subTagController.clear();
-      });
+  /// 显示添加子标签对话框
+  void _showAddSubTagDialog() {
+    _showSubTagDialog();
+  }
+
+  /// 编辑子标签
+  void _editSubTag(int index) {
+    final subTag = _subTags[index];
+    _showSubTagDialog(
+      initialName: subTag['name'] as String,
+      initialType: subTag['type'] as TagType,
+      index: index,
+    );
+  }
+
+  /// 显示子标签编辑对话框
+  void _showSubTagDialog({
+    String? initialName,
+    TagType? initialType,
+    int? index,
+  }) {
+    final nameController = TextEditingController(text: initialName ?? '');
+    final minValueController = TextEditingController();
+    final maxValueController = TextEditingController();
+    final unitController = TextEditingController();
+    final iconController = TextEditingController();
+    
+    TagType selectedType = initialType ?? TagType.binary;
+    
+    // 如果是编辑模式，初始化配置值
+    if (index != null && _subTags[index].containsKey('config')) {
+      final config = _subTags[index]['config'] as Map<String, dynamic>;
+      if (selectedType == TagType.quantitative) {
+        minValueController.text = config['minValue']?.toString() ?? '1';
+        maxValueController.text = config['maxValue']?.toString() ?? '10';
+        unitController.text = config['unit']?.toString() ?? '';
+      } else if (selectedType == TagType.binary) {
+        iconController.text = config['icon']?.toString() ?? '✓';
+      }
+    } else {
+      // 默认值
+      minValueController.text = '1';
+      maxValueController.text = '10';
+      iconController.text = '✓';
     }
+    
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(index != null ? '编辑子标签' : '添加子标签'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: '子标签名称',
+                    hintText: '输入子标签名称',
+                  ),
+                  autofocus: true,
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<TagType>(
+                  value: selectedType,
+                  decoration: const InputDecoration(
+                    labelText: '标签类型',
+                  ),
+                  items: [TagType.quantitative, TagType.binary].map((type) {
+                    return DropdownMenuItem(
+                      value: type,
+                      child: Row(
+                        children: [
+                          Icon(_getTagTypeIcon(type), size: 20),
+                          const SizedBox(width: 8),
+                          Text(_getTypeDisplayName(type)),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setDialogState(() {
+                        selectedType = value;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _getTypeDescription(selectedType),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                
+                // 根据类型显示不同的配置选项
+                if (selectedType == TagType.quantitative) ...[
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  Text(
+                    '量化配置',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: minValueController,
+                          decoration: const InputDecoration(
+                            labelText: '最小值',
+                            border: OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: maxValueController,
+                          decoration: const InputDecoration(
+                            labelText: '最大值',
+                            border: OutlineInputBorder(),
+                          ),
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: unitController,
+                    decoration: const InputDecoration(
+                      labelText: '单位（可选）',
+                      hintText: '如：分、次、小时等',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ] else if (selectedType == TagType.binary) ...[
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  Text(
+                    '图标配置',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: iconController,
+                    decoration: const InputDecoration(
+                      labelText: '图标',
+                      hintText: '选择或输入图标',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '预设图标',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _predefinedIcons.take(8).map((icon) {
+                      return GestureDetector(
+                        onTap: () {
+                          setDialogState(() {
+                            iconController.text = icon;
+                          });
+                        },
+                        child: Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: iconController.text == icon
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Theme.of(context).colorScheme.outline,
+                              width: iconController.text == icon ? 2 : 1,
+                            ),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Center(
+                            child: Text(
+                              icon,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () {
+                final name = nameController.text.trim();
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('请输入子标签名称')),
+                  );
+                  return;
+                }
+                
+                // 验证量化标签的数值范围
+                if (selectedType == TagType.quantitative) {
+                  final minValue = double.tryParse(minValueController.text);
+                  final maxValue = double.tryParse(maxValueController.text);
+                  
+                  if (minValue == null || maxValue == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('请输入有效的数值范围')),
+                    );
+                    return;
+                  }
+                  
+                  if (maxValue <= minValue) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('最大值必须大于最小值')),
+                    );
+                    return;
+                  }
+                }
+                
+                // 验证非量化标签的图标
+                if (selectedType == TagType.binary && iconController.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('请选择或输入图标')),
+                  );
+                  return;
+                }
+                
+                // 检查是否重名（排除自己）
+                final isDuplicate = _subTags.asMap().entries.any((entry) {
+                  return entry.key != index && entry.value['name'] == name;
+                });
+                
+                if (isDuplicate) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('子标签名称已存在')),
+                  );
+                  return;
+                }
+                
+                // 构建配置对象
+                Map<String, dynamic> config = {};
+                if (selectedType == TagType.quantitative) {
+                  config = {
+                    'minValue': double.parse(minValueController.text),
+                    'maxValue': double.parse(maxValueController.text),
+                    'unit': unitController.text.trim(),
+                  };
+                } else if (selectedType == TagType.binary) {
+                  config = {
+                    'icon': iconController.text.trim(),
+                  };
+                }
+                
+                setState(() {
+                  final subTagData = {
+                    'name': name,
+                    'type': selectedType,
+                    'config': config,
+                  };
+                  
+                  if (index != null) {
+                    _subTags[index] = subTagData;
+                  } else {
+                    _subTags.add(subTagData);
+                  }
+                });
+                
+                Navigator.of(context).pop();
+              },
+              child: Text(index != null ? '保存' : '添加'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 移除子标签
-  void _removeSubTag(String subTag) {
+  void _removeSubTag(int index) {
     setState(() {
-      _subTags.remove(subTag);
+      _subTags.removeAt(index);
     });
+  }
+
+  /// 获取标签类型对应的图标
+  IconData _getTagTypeIcon(TagType type) {
+    switch (type) {
+      case TagType.quantitative:
+        return Icons.trending_up;
+      case TagType.binary:
+        return Icons.check_circle_outline;
+      case TagType.complex:
+        return Icons.category_outlined;
+    }
   }
 
   /// 获取标签类型显示名称

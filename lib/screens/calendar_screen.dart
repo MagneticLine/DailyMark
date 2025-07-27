@@ -9,6 +9,7 @@ import '../repositories/tag_repository.dart';
 import '../repositories/tag_record_repository.dart';
 import '../widgets/tag_management_panel.dart';
 import '../widgets/tag_value_dialog.dart';
+import '../widgets/complex_tag_management_panel.dart';
 import '../constants/heatmap_colors.dart';
 
 /// 日历主界面
@@ -44,6 +45,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
   // 单标签聚焦模式状态
   Tag? _focusedTag; // 当前聚焦的标签，null表示普通模式
   
+  // 复杂标签管理面板状态
+  Tag? _showingComplexTag; // 当前显示复杂标签管理面板的标签，null表示不显示
+  Tag? _focusedSubTag; // 当前聚焦的子标签（用于复杂标签的子标签聚焦模式）
+  
   // 数据缓存优化
   final Map<String, Map<String, TagRecord>> _recordCache = {}; // tagId -> {dateKey -> record}
   DateTime? _cachedMonth; // 当前缓存的月份
@@ -75,8 +80,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
               );
               
-              // 如果有数据变更，重新加载数据
+              // 如果有数据变更，强制重新加载数据
               if (result == true) {
+                // 清空缓存，强制重新加载
+                _cachedMonth = null;
+                _recordCache.clear();
+                _tagRecords.clear();
+                
                 await _loadTagsAndRecords();
                 setState(() {
                   _dataRefreshCounter++;
@@ -95,8 +105,13 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
               );
               
-              // 如果有数据变更，重新加载数据
+              // 如果有数据变更，强制重新加载数据
               if (result == true) {
+                // 清空缓存，强制重新加载
+                _cachedMonth = null;
+                _recordCache.clear();
+                _tagRecords.clear();
+                
                 await _loadTagsAndRecords();
                 setState(() {
                   _dataRefreshCounter++;
@@ -112,8 +127,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
         // 点击空白处取消聚焦
         onTap: () => _handleBackgroundTap(),
         behavior: HitTestBehavior.translucent,
-        child: Column(
-          children: [
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
             // 日历组件
             Card(
               margin: const EdgeInsets.all(16),
@@ -296,7 +312,21 @@ class _CalendarScreenState extends State<CalendarScreen> {
               onTagLongPress: _handleTagLongPress,
               onTagVisibilityChanged: _handleTagVisibilityChanged,
             ),
-          ],
+            
+            // 复杂标签管理面板（在原先折叠式标签管理面板组件下方）
+            if (_showingComplexTag != null)
+              ComplexTagManagementPanel(
+                key: ValueKey('${_showingComplexTag!.id}_${_selectedDay?.millisecondsSinceEpoch ?? 0}_$_dataRefreshCounter'),
+                selectedDate: _selectedDay ?? DateTime.now(),
+                complexTag: _showingComplexTag!,
+                focusedSubTag: _focusedSubTag,
+                onSubTagTap: _handleSubTagTap,
+                onSubTagLongPress: _handleSubTagLongPress,
+                onComplexTagSave: _handleComplexTagSave,
+                onClose: _handleComplexTagPanelClose,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -412,11 +442,23 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   /// 处理背景点击
   void _handleBackgroundTap() {
+    bool hasChanges = false;
+    
     if (_focusedTag != null) {
-      setState(() {
-        _focusedTag = null;
-        debugPrint('点击空白处，取消聚焦模式');
-      });
+      _focusedTag = null;
+      _focusedSubTag = null; // 同时取消子标签聚焦
+      hasChanges = true;
+      debugPrint('点击空白处，取消聚焦模式');
+    }
+    
+    if (_showingComplexTag != null) {
+      _showingComplexTag = null;
+      hasChanges = true;
+      debugPrint('点击空白处，关闭复杂标签管理面板');
+    }
+    
+    if (hasChanges) {
+      setState(() {});
     }
   }
 
@@ -428,11 +470,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
       // 如果点击的是当前聚焦的标签，则取消聚焦
       if (_focusedTag?.id == tag.id) {
         _focusedTag = null;
+        _focusedSubTag = null; // 同时取消子标签聚焦
+        _showingComplexTag = null; // 关闭复杂标签管理面板
         debugPrint('取消聚焦模式');
       } else {
         // 否则聚焦到该标签
         _focusedTag = tag;
+        _focusedSubTag = null; // 重置子标签聚焦状态
         debugPrint('聚焦到标签: ${tag.name}');
+        
+        // 如果是复杂标签，自动显示子标签管理面板
+        if (tag.type.isComplex) {
+          _showingComplexTag = tag;
+          debugPrint('自动显示复杂标签管理面板: ${tag.name}');
+        } else {
+          _showingComplexTag = null; // 关闭复杂标签管理面板
+        }
       }
     });
   }
@@ -441,23 +494,87 @@ class _CalendarScreenState extends State<CalendarScreen> {
   void _handleTagLongPress(Tag tag) {
     debugPrint('标签长按: ${tag.name}');
     
-    // 检查标签类型，当前只支持量化标签
-    if (!tag.type.isQuantitative) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${tag.type.displayName}功能将在后续版本中提供'),
-          backgroundColor: Theme.of(context).colorScheme.secondary,
-        ),
-      );
-      return;
+    if (tag.type.isQuantitative) {
+      // 量化标签：显示数值修改对话框
+      _showTagValueDialog(tag);
+    } else if (tag.type.isBinary) {
+      // 非量化标签：显示删除对话框
+      _showTagDeleteDialog(tag);
+    } else if (tag.type.isComplex) {
+      // 复杂标签：显示删除对话框
+      _showTagDeleteDialog(tag);
     }
-    
-    _showTagValueDialog(tag);
   }
 
   /// 处理标签可见性变化
   void _handleTagVisibilityChanged(Tag tag, bool isVisible) {
     debugPrint('标签可见性变化: ${tag.name} -> $isVisible');
+  }
+
+  /// 处理复杂标签管理面板关闭
+  void _handleComplexTagPanelClose() {
+    setState(() {
+      _showingComplexTag = null;
+      _focusedSubTag = null;
+    });
+    debugPrint('关闭复杂标签管理面板');
+  }
+
+  /// 处理子标签点击（用于子标签聚焦模式）
+  void _handleSubTagTap(Tag subTag) {
+    setState(() {
+      // 如果点击的是当前聚焦的子标签，则取消聚焦
+      if (_focusedSubTag?.id == subTag.id) {
+        _focusedSubTag = null;
+        _focusedTag = null; // 同时取消主标签聚焦
+        debugPrint('取消子标签聚焦模式');
+      } else {
+        // 否则聚焦到该子标签
+        _focusedSubTag = subTag;
+        _focusedTag = subTag; // 同时设置主标签聚焦以在日历上显示
+        debugPrint('聚焦到子标签: ${subTag.name}');
+      }
+    });
+  }
+
+  /// 处理子标签长按
+  void _handleSubTagLongPress(Tag subTag) {
+    debugPrint('子标签长按: ${subTag.name}');
+    
+    if (subTag.type.isQuantitative || subTag.type.isBinary) {
+      // 量化子标签或非量化子标签：显示修改对话框
+      _showTagValueDialog(subTag);
+    } else {
+      // 复杂子标签：暂不支持
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${subTag.type.displayName}功能将在后续版本中提供'),
+          backgroundColor: Theme.of(context).colorScheme.secondary,
+        ),
+      );
+    }
+  }
+
+  /// 处理复杂标签记录保存
+  void _handleComplexTagSave(Tag complexTag, List<String> selectedSubTags) {
+    debugPrint('复杂标签记录保存: ${complexTag.name} = $selectedSubTags');
+    
+    // 重新加载数据以更新界面
+    _loadTagsAndRecords().then((_) {
+      setState(() {
+        _dataRefreshCounter++;
+      });
+    });
+    
+    // 显示成功提示
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已保存 ${complexTag.name} 的记录'),
+          backgroundColor: Theme.of(context).colorScheme.primary,
+        ),
+      );
+    }
   }
 
   /// 显示标签数值修改对话框
@@ -485,6 +602,63 @@ class _CalendarScreenState extends State<CalendarScreen> {
       }
     } catch (e) {
       debugPrint('显示标签对话框失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('加载标签数据失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 显示标签删除对话框
+  Future<void> _showTagDeleteDialog(Tag tag) async {
+    final selectedDate = _selectedDay ?? DateTime.now();
+    
+    try {
+      // 查找当日该标签的记录
+      final existingRecord = await _recordRepository.findByTagAndDate(tag.id, selectedDate);
+      
+      if (existingRecord == null) {
+        // 如果没有记录，提示用户
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('当日没有该标签的记录')),
+          );
+        }
+        return;
+      }
+      
+      // 显示删除确认对话框
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('删除标签记录'),
+            content: Text('确定要删除 ${tag.name} 在 ${selectedDate.toString().split(' ')[0]} 的记录吗？'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _deleteTagRecord(existingRecord);
+                },
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                ),
+                child: const Text('删除'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('显示删除对话框失败: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -611,7 +785,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     Color textColor;
     
     // 量化标签聚焦模式：特殊的背景色处理
-    if (_focusedTag != null && _focusedTag!.type.isQuantitative) {
+    if (_focusedTag != null && (_focusedTag!.type.isQuantitative || 
+        (_focusedSubTag != null && _focusedSubTag!.type.isQuantitative))) {
       final heatmapColor = _getQuantitativeHeatmapColor(day);
       backgroundColor = heatmapColor;
       
@@ -730,6 +905,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
   
   /// 构建聚焦模式内容
   List<Widget> _buildFocusedModeContent(DateTime day, Color textColor) {
+    // 如果是子标签聚焦模式，需要特殊处理
+    if (_focusedSubTag != null) {
+      return _buildSubTagFocusedContent(day, textColor);
+    }
+    
     final record = _getRecordForDate(_focusedTag!.id, day);
     
     if (_focusedTag!.type.isQuantitative) {
@@ -756,14 +936,23 @@ class _CalendarScreenState extends State<CalendarScreen> {
       if (record?.booleanValue == true) {
         return [_buildBinaryMarker(day)];
       }
+    } else if (_focusedTag!.type.isComplex) {
+      // 复杂标签：显示选中的子标签数量或具体子标签
+      if (record?.listValue.isNotEmpty == true) {
+        return [_buildComplexMarker(day, record!)];
+      }
     }
-    // 复杂标签：暂不显示任何内容
     
     return [];
   }
   
   /// 获取量化标签的热力图颜色
   Color _getQuantitativeHeatmapColor(DateTime day) {
+    // 如果是子标签聚焦模式
+    if (_focusedSubTag != null && _focusedSubTag!.type.isQuantitative) {
+      return _getSubTagQuantitativeHeatmapColor(day);
+    }
+    
     final record = _getRecordForDate(_focusedTag!.id, day);
     
     if (record?.numericValue == null) {
@@ -778,6 +967,30 @@ class _CalendarScreenState extends State<CalendarScreen> {
     
     // 使用增强对比度算法
     final intensity = _enhanceContrast(normalizedValue);
+    
+    return HeatmapColors.getColorForIntensity(intensity);
+  }
+  
+  /// 获取量化子标签的热力图颜色
+  Color _getSubTagQuantitativeHeatmapColor(DateTime day) {
+    // 获取复杂标签的记录
+    final complexRecord = _getRecordForDate(_showingComplexTag!.id, day);
+    
+    if (complexRecord?.listValue.isEmpty != false) {
+      return HeatmapColors.getNoDataColor();
+    }
+    
+    final selectedSubTags = complexRecord!.listValue;
+    
+    // 检查当前聚焦的量化子标签是否被选中
+    if (!selectedSubTags.contains(_focusedSubTag!.name)) {
+      return HeatmapColors.getNoDataColor();
+    }
+    
+    // 对于量化子标签，我们使用一个简化的方案：
+    // 基于子标签在复杂标签中的"重要性"或者给一个固定的中等强度值
+    // 这里我们给一个中等强度值 (0.6) 来显示热力图效果
+    final intensity = 0.6;
     
     return HeatmapColors.getColorForIntensity(intensity);
   }
@@ -844,6 +1057,148 @@ class _CalendarScreenState extends State<CalendarScreen> {
         ),
       ),
     );
+  }
+  
+  /// 构建复杂标签的标记
+  Widget _buildComplexMarker(DateTime day, TagRecord record) {
+    // 解析标签颜色
+    Color tagColor;
+    try {
+      tagColor = Color(int.parse(_focusedTag!.color.replaceFirst('#', '0xFF')));
+    } catch (e) {
+      tagColor = Theme.of(context).colorScheme.primary;
+    }
+    
+    final selectedSubTags = record.listValue;
+    final totalSubTags = _focusedTag!.complexSubTags.length;
+    
+    // 如果只选中了一个子标签，显示子标签名称
+    if (selectedSubTags.length == 1) {
+      final subTagName = selectedSubTags.first;
+      return Positioned(
+        bottom: 2,
+        left: 2,
+        right: 2,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+          decoration: BoxDecoration(
+            color: tagColor.withValues(alpha: 0.8),
+            borderRadius: BorderRadius.circular(2),
+          ),
+          child: Text(
+            subTagName,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 8,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      );
+    } else {
+      // 如果选中了多个子标签，显示数量
+      return Positioned(
+        bottom: 4,
+        right: 6,
+        child: Container(
+          width: 16,
+          height: 12,
+          decoration: BoxDecoration(
+            color: tagColor,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Center(
+            child: Text(
+              '${selectedSubTags.length}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 8,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+  }
+  
+  /// 构建子标签聚焦模式内容
+  List<Widget> _buildSubTagFocusedContent(DateTime day, Color textColor) {
+    // 获取复杂标签的记录
+    final complexRecord = _getRecordForDate(_showingComplexTag!.id, day);
+    
+    if (complexRecord?.listValue.isNotEmpty == true) {
+      final selectedSubTags = complexRecord!.listValue;
+      
+      // 检查当前聚焦的子标签是否在选中列表中
+      if (selectedSubTags.contains(_focusedSubTag!.name)) {
+        // 如果子标签是量化类型，可以显示数值（这里简化处理）
+        if (_focusedSubTag!.type.isQuantitative) {
+          // 对于量化子标签，可以考虑从复杂记录中提取具体数值
+          // 这里简化为显示子标签名称
+          return [
+            Positioned(
+              bottom: 2,
+              left: 2,
+              right: 2,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                decoration: BoxDecoration(
+                  color: _getSubTagColor().withValues(alpha: 0.8),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+                child: Text(
+                  _focusedSubTag!.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ];
+        } else {
+          // 非量化子标签：显示标记
+          return [
+            Positioned(
+              bottom: 4,
+              right: 6,
+              child: Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: _getSubTagColor(),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.check,
+                  color: Colors.white,
+                  size: 8,
+                ),
+              ),
+            ),
+          ];
+        }
+      }
+    }
+    
+    return [];
+  }
+  
+  /// 获取子标签颜色
+  Color _getSubTagColor() {
+    try {
+      return Color(int.parse(_focusedSubTag!.color.replaceFirst('#', '0xFF')));
+    } catch (e) {
+      return Theme.of(context).colorScheme.primary;
+    }
   }
   
   /// 构建多标签指示器（普通模式）

@@ -157,6 +157,120 @@ class _DatabaseDemoScreenState extends State<DatabaseDemoScreen> {
     }
   }
 
+  /// 创建随机量化标签
+  Future<void> _createRandomQuantitativeTags() async {
+    setState(() {
+      _isLoading = true;
+      _message = '正在生成随机量化标签...';
+    });
+
+    try {
+      await _dataService.createRandomQuantitativeTags(count: 5);
+      _hasDataChanged = true;
+      await _refreshStatus();
+      setState(() {
+        _message = '随机量化标签生成成功！已为2025年7月填充数据';
+      });
+    } catch (e) {
+      setState(() {
+        _message = '生成随机量化标签失败: $e';
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// 创建随机非量化标签
+  Future<void> _createRandomBinaryTags() async {
+    setState(() {
+      _isLoading = true;
+      _message = '正在生成随机非量化标签...';
+    });
+
+    try {
+      await _dataService.createRandomBinaryTags(count: 5);
+      _hasDataChanged = true;
+      await _refreshStatus();
+      setState(() {
+        _message = '随机非量化标签生成成功！已为2025年7月填充数据';
+      });
+    } catch (e) {
+      setState(() {
+        _message = '生成随机非量化标签失败: $e';
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// 创建随机复杂标签
+  Future<void> _createRandomComplexTags() async {
+    setState(() {
+      _isLoading = true;
+      _message = '正在生成随机复杂标签...';
+    });
+
+    try {
+      await _dataService.createRandomComplexTags(count: 3);
+      _hasDataChanged = true;
+      await _refreshStatus();
+      setState(() {
+        _message = '随机复杂标签生成成功！已为2025年7月填充数据';
+      });
+    } catch (e) {
+      setState(() {
+        _message = '生成随机复杂标签失败: $e';
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// 创建一年模拟数据
+  Future<void> _createOneYearSimulation() async {
+    setState(() {
+      _isLoading = true;
+      _message = '正在生成一年模拟数据，这可能需要一些时间...';
+    });
+
+    try {
+      await _dataService.createOneYearSimulationData();
+      _hasDataChanged = true;
+      await _refreshStatus();
+      setState(() {
+        _message = '一年模拟数据生成成功！包含大量历史记录和日记';
+      });
+    } catch (e) {
+      setState(() {
+        _message = '生成一年模拟数据失败: $e';
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// 构建分组标题
+  Widget _buildSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Text(
+        title,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+          fontWeight: FontWeight.bold,
+          color: Theme.of(context).primaryColor,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -223,32 +337,81 @@ class _DatabaseDemoScreenState extends State<DatabaseDemoScreen> {
             
             // 操作按钮
             Expanded(
-              child: Column(
-                children: [
-                  ElevatedButton(
-                    onPressed: _isLoading ? null : _refreshStatus,
-                    child: const Text('刷新状态'),
-                  ),
-                  const SizedBox(height: 8),
-                  ElevatedButton(
-                    onPressed: _isLoading ? null : _createSampleData,
-                    child: const Text('创建示例数据'),
-                  ),
-                  const SizedBox(height: 8),
-                  ElevatedButton(
-                    onPressed: _isLoading ? null : _testTagOperations,
-                    child: const Text('测试标签操作'),
-                  ),
-                  const SizedBox(height: 8),
-                  ElevatedButton(
-                    onPressed: _isLoading ? null : _clearAllData,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade400,
-                      foregroundColor: Colors.white,
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    // 基础操作
+                    _buildSectionTitle('基础操作'),
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _refreshStatus,
+                      child: const Text('刷新状态'),
                     ),
-                    child: const Text('清理所有数据'),
-                  ),
-                ],
+                    const SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _createSampleData,
+                      child: const Text('创建示例数据'),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _testTagOperations,
+                      child: const Text('测试标签操作'),
+                    ),
+                    
+                    const SizedBox(height: 16),
+                    
+                    // 随机数据生成器
+                    _buildSectionTitle('随机数据生成器'),
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _createRandomQuantitativeTags,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue.shade400,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('生成随机量化标签'),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _createRandomBinaryTags,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade400,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('生成随机非量化标签'),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _createRandomComplexTags,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.purple.shade400,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('生成随机复杂标签'),
+                    ),
+                    const SizedBox(height: 8),
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _createOneYearSimulation,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange.shade400,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('模拟一年使用数据'),
+                    ),
+                    
+                    const SizedBox(height: 16),
+                    
+                    // 危险操作
+                    _buildSectionTitle('危险操作'),
+                    ElevatedButton(
+                      onPressed: _isLoading ? null : _clearAllData,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red.shade400,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('清理所有数据'),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                ),
               ),
             ),
           ],

@@ -93,6 +93,17 @@ class _TagManagementPanelState extends State<TagManagementPanel>
     if (oldWidget.selectedDate != widget.selectedDate) {
       _loadData();
     }
+    
+    // 如果进入聚焦模式，自动折叠面板
+    if (oldWidget.focusedTag == null && widget.focusedTag != null) {
+      if (_isExpanded) {
+        setState(() {
+          _isExpanded = false;
+        });
+        _animationController.reverse();
+        debugPrint('进入聚焦模式，自动折叠标签管理面板');
+      }
+    }
   }
 
   /// 加载标签和记录数据
@@ -139,14 +150,168 @@ class _TagManagementPanelState extends State<TagManagementPanel>
 
   /// 处理标签点击
   void _handleTagTap(Tag tag) {
-    // 调用外部回调
-    widget.onTagTap?.call(tag);
+    // 检查标签是否已添加到当日记录
+    final isAdded = _addedTagIds.contains(tag.id);
+    
+    if (isAdded) {
+      // 已添加的标签：进入聚焦模式
+      widget.onTagTap?.call(tag);
+    } else {
+      // 未添加的标签：添加到生效状态
+      _addTagToToday(tag);
+    }
   }
 
   /// 处理标签长按
   void _handleTagLongPress(Tag tag) {
-    // 调用外部回调
-    widget.onTagLongPress?.call(tag);
+    // 检查标签是否已添加到当日记录
+    final isAdded = _addedTagIds.contains(tag.id);
+    
+    if (isAdded) {
+      // 已添加的标签：调用外部回调（显示修改/删除对话框）
+      widget.onTagLongPress?.call(tag);
+    } else {
+      // 未添加的标签：长按无效果
+      debugPrint('未添加标签的长按操作被忽略: ${tag.name}');
+    }
+  }
+
+  /// 添加标签到当日记录
+  Future<void> _addTagToToday(Tag tag) async {
+    try {
+      debugPrint('添加标签到当日: ${tag.name}');
+      
+      if (tag.type.isQuantitative) {
+        // 量化标签：弹出数值输入窗口
+        _showQuantitativeTagDialog(tag);
+      } else if (tag.type.isBinary) {
+        // 非量化标签：直接生效
+        await _saveTagRecord(tag, true);
+      } else if (tag.type.isComplex) {
+        // 复杂标签：直接生效（空的子标签列表）
+        await _saveTagRecord(tag, <String>[]);
+      }
+    } catch (e) {
+      debugPrint('添加标签失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('添加标签失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 显示量化标签数值输入对话框
+  void _showQuantitativeTagDialog(Tag tag) {
+    final minValue = tag.quantitativeMinValue ?? 1.0;
+    final maxValue = tag.quantitativeMaxValue ?? 10.0;
+    final unit = tag.quantitativeUnit ?? '';
+    
+    final controller = TextEditingController(text: minValue.toString());
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('输入${tag.name}的数值'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: '数值',
+                hintText: '输入 $minValue - $maxValue 之间的数值',
+                suffixText: unit.isNotEmpty ? unit : null,
+                border: const OutlineInputBorder(),
+              ),
+              autofocus: true,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '范围: $minValue - $maxValue${unit.isNotEmpty ? ' $unit' : ''}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final valueText = controller.text.trim();
+              final value = double.tryParse(valueText);
+              
+              if (value == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('请输入有效的数值')),
+                );
+                return;
+              }
+              
+              if (value < minValue || value > maxValue) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('数值必须在 $minValue - $maxValue 之间')),
+                );
+                return;
+              }
+              
+              Navigator.of(context).pop();
+              await _saveTagRecord(tag, value);
+            },
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 保存标签记录
+  Future<void> _saveTagRecord(Tag tag, dynamic value) async {
+    try {
+      // 创建新记录
+      final newRecord = TagRecord(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        tagId: tag.id,
+        date: widget.selectedDate,
+        value: value,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      
+      await _recordRepository.insert(newRecord);
+      debugPrint('创建标签记录: ${tag.name} = $value');
+      
+      // 重新加载数据以更新界面
+      await _loadData();
+      
+      // 显示成功提示
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已添加 ${tag.name}'),
+            backgroundColor: Theme.of(context).colorScheme.primary,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('保存标签记录失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('保存失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    }
   }
 
   @override
