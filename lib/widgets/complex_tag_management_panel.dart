@@ -3,6 +3,14 @@ import '../models/models.dart';
 import '../repositories/tag_repository.dart';
 import '../repositories/tag_record_repository.dart';
 
+/// 拖拽数据包装类，用于区分不同面板的拖拽
+class TagDragData {
+  final Tag tag;
+  final String source; // 'main' 或 'complex'
+
+  const TagDragData({required this.tag, required this.source});
+}
+
 /// 复杂标签专用的折叠式标签管理面板组件
 ///
 /// 用于管理复杂标签的子标签，支持：
@@ -32,6 +40,9 @@ class ComplexTagManagementPanel extends StatefulWidget {
   /// 面板关闭回调
   final VoidCallback? onClose;
 
+  /// 数据更新回调（用于通知父组件刷新）
+  final VoidCallback? onDataChanged;
+
   const ComplexTagManagementPanel({
     super.key,
     required this.selectedDate,
@@ -41,6 +52,7 @@ class ComplexTagManagementPanel extends StatefulWidget {
     this.onSubTagLongPress,
     this.onComplexTagSave,
     this.onClose,
+    this.onDataChanged,
   });
 
   @override
@@ -65,8 +77,6 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
   // 面板状态
   bool _isExpanded = true; // 默认展开
   bool _isLoading = true;
-
-
 
   @override
   void initState() {
@@ -108,6 +118,11 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
     }
   }
 
+  /// 刷新数据（供外部调用，用于无痕更新）
+  Future<void> refreshData() async {
+    await _loadData();
+  }
+
   /// 加载子标签和记录数据
   Future<void> _loadData() async {
     setState(() {
@@ -126,16 +141,16 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
       if (widget.complexTag.config.containsKey('subTagsConfig')) {
         // 使用新版本的完整配置信息
         final subTagsConfig = List<Map<String, dynamic>>.from(
-          widget.complexTag.config['subTagsConfig']
+          widget.complexTag.config['subTagsConfig'],
         );
-        
+
         subTags = subTagsConfig.asMap().entries.map((entry) {
           final index = entry.key;
           final subTagData = entry.value;
           final name = subTagData['name'] as String;
           final typeString = subTagData['type'].toString();
           final config = Map<String, dynamic>.from(subTagData['config'] ?? {});
-          
+
           // 解析标签类型
           TagType subTagType = TagType.binary;
           if (typeString.contains('quantitative')) {
@@ -143,7 +158,7 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
           } else if (typeString.contains('binary')) {
             subTagType = TagType.binary;
           }
-          
+
           return Tag(
             id: '${widget.complexTag.id}_sub_$index',
             name: name,
@@ -165,7 +180,9 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
           Map<String, dynamic> subTagConfig = {'icon': '✓'};
 
           // 为某些特定的子标签设置为量化类型
-          if (name.contains('加班') || name.contains('时长') || name.contains('次数')) {
+          if (name.contains('加班') ||
+              name.contains('时长') ||
+              name.contains('次数')) {
             subTagType = TagType.quantitative;
             subTagConfig = {
               'minValue': 0.0,
@@ -230,28 +247,85 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
 
   /// 处理子标签点击
   void _handleSubTagTap(Tag subTag) {
-    // 调用外部回调（用于聚焦模式）
-    widget.onSubTagTap?.call(subTag);
+    // 检查子标签是否已选中
+    final isSelected = _selectedSubTagNames.contains(subTag.name);
+
+    if (isSelected) {
+      // 已选中的子标签：调用外部回调（用于聚焦模式）
+      widget.onSubTagTap?.call(subTag);
+    } else {
+      // 未选中的子标签：点击无效果（删除原先的添加逻辑）
+      debugPrint('未选中子标签的点击操作被忽略: ${subTag.name}');
+    }
   }
 
   /// 处理子标签长按
   void _handleSubTagLongPress(Tag subTag) {
-    // 长按切换子标签选中状态（类似原先标签管理面板的长按添加逻辑）
+    // 检查子标签是否已选中
+    final isSelected = _selectedSubTagNames.contains(subTag.name);
+
+    if (isSelected) {
+      // 已选中的子标签：调用外部回调
+      widget.onSubTagLongPress?.call(subTag);
+    } else {
+      // 未选中的子标签：长按无效果（删除原先的添加逻辑）
+      debugPrint('未选中子标签的长按操作被忽略: ${subTag.name}');
+    }
+  }
+
+  /// 处理子标签拖拽到已选中区域
+  Future<void> _handleSubTagDrop(TagDragData dragData) async {
+    // 只接受来自复杂标签面板的拖拽
+    if (dragData.source != 'complex') {
+      debugPrint('拒绝来自其他面板的拖拽: ${dragData.tag.name}');
+      return;
+    }
+
+    final subTag = dragData.tag;
+
+    // 检查子标签是否已经选中
+    if (_selectedSubTagNames.contains(subTag.name)) {
+      debugPrint('子标签已选中，忽略拖拽: ${subTag.name}');
+      return;
+    }
+
+    // 添加子标签到选中列表
     setState(() {
-      if (_selectedSubTagNames.contains(subTag.name)) {
-        _selectedSubTagNames.remove(subTag.name);
-        debugPrint('取消选中子标签: ${subTag.name}');
-      } else {
-        _selectedSubTagNames.add(subTag.name);
-        debugPrint('选中子标签: ${subTag.name}');
-      }
+      _selectedSubTagNames.add(subTag.name);
+      debugPrint('通过拖拽选中子标签: ${subTag.name}');
     });
 
     // 自动保存复杂标签记录
-    _saveComplexTagRecord();
+    await _saveComplexTagRecord();
+  }
 
-    // 调用外部回调
-    widget.onSubTagLongPress?.call(subTag);
+  /// 处理子标签拖拽到未选中区域（取消选择）
+  Future<void> _handleSubTagRemove(TagDragData dragData) async {
+    // 只接受来自复杂标签面板的拖拽
+    if (dragData.source != 'complex') {
+      debugPrint('拒绝来自其他面板的拖拽: ${dragData.tag.name}');
+      return;
+    }
+
+    final subTag = dragData.tag;
+
+    // 检查子标签是否已经选中
+    if (!_selectedSubTagNames.contains(subTag.name)) {
+      debugPrint('子标签未选中，无需取消: ${subTag.name}');
+      return;
+    }
+
+    // 从选中列表中移除子标签
+    setState(() {
+      _selectedSubTagNames.remove(subTag.name);
+      debugPrint('通过拖拽取消选中子标签: ${subTag.name}');
+    });
+
+    // 自动保存复杂标签记录
+    await _saveComplexTagRecord();
+
+    // 控制台输出成功信息
+    debugPrint('✅ 已取消选择子标签: ${subTag.name}');
   }
 
   /// 保存复杂标签记录
@@ -297,22 +371,14 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
 
       // 调用外部回调
       widget.onComplexTagSave?.call(widget.complexTag, selectedList);
+
+      // 通知父组件数据已更新
+      widget.onDataChanged?.call();
     } catch (e) {
       debugPrint('保存复杂标签记录失败: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('保存失败: $e'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
+      // 错误信息已通过debugPrint输出
     }
   }
-
-
-
-
 
   /// 显示添加子标签对话框（带配置选项）
   void _showAddSubTagDialog() {
@@ -321,15 +387,29 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
     final maxValueController = TextEditingController(text: '10');
     final unitController = TextEditingController();
     final iconController = TextEditingController(text: '✓');
-    
+
     TagType selectedType = TagType.binary;
-    
+
     // 预定义图标
     final predefinedIcons = [
-      '✓', '×', '★', '♥', '●', '■', '▲', '♦',
-      '☀', '☁', '☂', '⚡', '❄', '🔥', '💧', '🌟',
+      '✓',
+      '×',
+      '★',
+      '♥',
+      '●',
+      '■',
+      '▲',
+      '♦',
+      '☀',
+      '☁',
+      '☂',
+      '⚡',
+      '❄',
+      '🔥',
+      '💧',
+      '🌟',
     ];
-    
+
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -350,9 +430,7 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
                 const SizedBox(height: 16),
                 DropdownButtonFormField<TagType>(
                   value: selectedType,
-                  decoration: const InputDecoration(
-                    labelText: '标签类型',
-                  ),
+                  decoration: const InputDecoration(labelText: '标签类型'),
                   items: [TagType.quantitative, TagType.binary].map((type) {
                     return DropdownMenuItem(
                       value: type,
@@ -374,7 +452,7 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
                   },
                 ),
                 const SizedBox(height: 16),
-                
+
                 // 根据类型显示不同的配置选项
                 if (selectedType == TagType.quantitative) ...[
                   const Divider(),
@@ -491,48 +569,49 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
               onPressed: () async {
                 final name = nameController.text.trim();
                 if (name.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('请输入子标签名称')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('请输入子标签名称')));
                   return;
                 }
-                
+
                 // 验证量化标签的数值范围
                 if (selectedType == TagType.quantitative) {
                   final minValue = double.tryParse(minValueController.text);
                   final maxValue = double.tryParse(maxValueController.text);
-                  
+
                   if (minValue == null || maxValue == null) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('请输入有效的数值范围')),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text('请输入有效的数值范围')));
                     return;
                   }
-                  
+
                   if (maxValue <= minValue) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('最大值必须大于最小值')),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text('最大值必须大于最小值')));
                     return;
                   }
                 }
-                
+
                 // 验证非量化标签的图标
-                if (selectedType == TagType.binary && iconController.text.trim().isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('请选择或输入图标')),
-                  );
+                if (selectedType == TagType.binary &&
+                    iconController.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('请选择或输入图标')));
                   return;
                 }
-                
+
                 // 检查是否已存在同名标签
                 if (_subTags.any((tag) => tag.name == name)) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('该子标签已存在')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('该子标签已存在')));
                   return;
                 }
-                
+
                 // 构建配置对象
                 Map<String, dynamic> config = {};
                 if (selectedType == TagType.quantitative) {
@@ -542,11 +621,9 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
                     'unit': unitController.text.trim(),
                   };
                 } else if (selectedType == TagType.binary) {
-                  config = {
-                    'icon': iconController.text.trim(),
-                  };
+                  config = {'icon': iconController.text.trim()};
                 }
-                
+
                 Navigator.of(context).pop();
                 await _addNewSubTagWithConfig(name, selectedType, config);
               },
@@ -559,7 +636,11 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
   }
 
   /// 添加带配置的新子标签
-  Future<void> _addNewSubTagWithConfig(String name, TagType type, Map<String, dynamic> config) async {
+  Future<void> _addNewSubTagWithConfig(
+    String name,
+    TagType type,
+    Map<String, dynamic> config,
+  ) async {
     try {
       // 创建新的子标签
       final now = DateTime.now();
@@ -577,23 +658,21 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
       await _tagRepository.insert(newSubTag);
 
       // 更新复杂标签的子标签列表和配置
-      final updatedSubTags = List<String>.from(widget.complexTag.complexSubTags);
+      final updatedSubTags = List<String>.from(
+        widget.complexTag.complexSubTags,
+      );
       updatedSubTags.add(name);
-      
+
       // 获取现有的子标签配置
       List<Map<String, dynamic>> subTagsConfig = [];
       if (widget.complexTag.config.containsKey('subTagsConfig')) {
         subTagsConfig = List<Map<String, dynamic>>.from(
-          widget.complexTag.config['subTagsConfig']
+          widget.complexTag.config['subTagsConfig'],
         );
       }
-      
+
       // 添加新子标签的配置
-      subTagsConfig.add({
-        'name': name,
-        'type': type,
-        'config': config,
-      });
+      subTagsConfig.add({'name': name, 'type': type, 'config': config});
 
       final updatedComplexTag = widget.complexTag.copyWith(
         config: {
@@ -606,24 +685,16 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
 
       await _tagRepository.update(updatedComplexTag);
 
-      // 重新加载数据
-      await _loadData();
+      // 立即更新本地状态，避免重新加载
+      setState(() {
+        _subTags.add(newSubTag);
+      });
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已添加子标签"$name"')),
-        );
-      }
+      // 控制台输出成功信息
+      debugPrint('✅ 已添加子标签: $name');
     } catch (e) {
       debugPrint('添加子标签失败: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('添加失败: $e'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
+      // 错误信息已通过debugPrint输出
     }
   }
 
@@ -652,7 +723,7 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
             // 标题栏
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
                 color: complexTagColor.withValues(alpha: 0.1),
                 borderRadius: const BorderRadius.only(
@@ -703,11 +774,7 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
                   // 添加子标签按钮
                   IconButton(
                     onPressed: _showAddSubTagDialog,
-                    icon: Icon(
-                      Icons.add,
-                      color: complexTagColor,
-                      size: 20,
-                    ),
+                    icon: Icon(Icons.add, color: complexTagColor, size: 20),
                     tooltip: '添加子标签',
                   ),
 
@@ -774,43 +841,74 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 已选中的子标签区域
-          if (selectedSubTags.isNotEmpty) ...[
-            _buildSubTagGrid(
-              selectedSubTags,
-              theme,
-              colorScheme,
-              complexTagColor,
-            ),
-            const SizedBox(height: 16),
-          ] else ...[
-            // 如果没有已选中的子标签，显示提示信息
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: Text(
-                  '今日暂未选择子标签',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: colorScheme.onSurface.withValues(alpha: 0.5),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
+          // 已选中的子标签区域（支持拖拽目标）
+          DragTarget<TagDragData>(
+            onAcceptWithDetails: (details) => _handleSubTagDrop(details.data),
+            builder: (context, candidateData, rejectedData) {
+              final isHighlighted = candidateData.isNotEmpty;
 
-          // 未选中的子标签区域
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: selectedSubTags.isNotEmpty
+                    ? _buildSubTagGrid(
+                        selectedSubTags,
+                        theme,
+                        colorScheme,
+                        complexTagColor,
+                      )
+                    : Center(
+                        child: Text(
+                          isHighlighted ? '拖拽到此处选择子标签' : '今日暂未选择子标签',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: isHighlighted
+                                ? complexTagColor
+                                : colorScheme.onSurface.withValues(alpha: 0.5),
+                          ),
+                        ),
+                      ),
+              );
+            },
+          ),
+          const SizedBox(height: 4),
+
+          // 未选中的子标签区域（支持拖拽目标）
           if (unselectedSubTags.isNotEmpty) ...[
-            _buildSubTagGrid(
-              unselectedSubTags,
-              theme,
-              colorScheme,
-              complexTagColor,
+            DragTarget<TagDragData>(
+              onAcceptWithDetails: (details) =>
+                  _handleSubTagRemove(details.data),
+              builder: (context, candidateData, rejectedData) {
+                final isHighlighted = candidateData.isNotEmpty;
+
+                return Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                  child: Column(
+                    children: [
+                      if (isHighlighted)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            '拖拽到此处取消选择子标签',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.error,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      _buildSubTagGrid(
+                        unselectedSubTags,
+                        theme,
+                        colorScheme,
+                        complexTagColor,
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
           ],
         ],
@@ -890,80 +988,149 @@ class _ComplexTagManagementPanelState extends State<ComplexTagManagementPanel>
       textColor = complexTagColor.withValues(alpha: 0.6);
     }
 
-    return Material(
-      color: backgroundColor,
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        onTap: () => _handleSubTagTap(subTag),
-        onLongPress: () => _handleSubTagLongPress(subTag),
+    // 构建子标签内容
+    Widget subTagContent = Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor, width: borderWidth),
         borderRadius: BorderRadius.circular(8),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: borderColor, width: borderWidth),
-            borderRadius: BorderRadius.circular(8),
-            // 聚焦状态添加阴影效果
-            boxShadow: isFocused ? [
-              BoxShadow(
-                color: complexTagColor.withValues(alpha: 0.3),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ] : null,
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
+        // 聚焦状态添加阴影效果
+        boxShadow: isFocused
+            ? [
+                BoxShadow(
+                  color: complexTagColor.withValues(alpha: 0.3),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : null,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 标签类型图标和聚焦指示器
+            Stack(
+              alignment: Alignment.center,
               children: [
-                // 标签类型图标和聚焦指示器
-                Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Icon(
-                      _getTagTypeIcon(subTag.type),
-                      size: 14,
-                      color: textColor,
-                    ),
-                    // 聚焦指示器：右上角小圆点
-                    if (isFocused)
-                      Positioned(
-                        top: -2,
-                        right: -2,
-                        child: Container(
-                          width: 6,
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: complexTagColor,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
+                Icon(_getTagTypeIcon(subTag.type), size: 14, color: textColor),
+                // 聚焦指示器：右上角小圆点
+                if (isFocused)
+                  Positioned(
+                    top: -2,
+                    right: -2,
+                    child: Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: complexTagColor,
+                        shape: BoxShape.circle,
                       ),
-                  ],
-                ),
-                const SizedBox(height: 1),
-                
-                // 子标签名称
-                Flexible(
-                  child: Text(
-                    subTag.name,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: textColor,
-                      fontWeight: isFocused ? FontWeight.w600 : 
-                                  (isSelected ? FontWeight.w500 : FontWeight.normal),
-                      fontSize: 11,
                     ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
               ],
             ),
-          ),
+            const SizedBox(height: 1),
+
+            // 子标签名称
+            Flexible(
+              child: Text(
+                subTag.name,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: textColor,
+                  fontWeight: isFocused
+                      ? FontWeight.w600
+                      : (isSelected ? FontWeight.w500 : FontWeight.normal),
+                  fontSize: 11,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
       ),
     );
+
+    // 如果是未选中的子标签，支持拖拽到已选中区域
+    if (!isSelected) {
+      return Draggable<TagDragData>(
+        data: TagDragData(tag: subTag, source: 'complex'),
+        feedback: Material(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          elevation: 4,
+          child: Container(
+            width: 80, // 固定宽度，避免拖拽时变形
+            height: 44, // 固定高度
+            child: subTagContent,
+          ),
+        ),
+        childWhenDragging: Opacity(
+          opacity: 0.5,
+          child: Material(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: () => _handleSubTagTap(subTag),
+              onLongPress: () => _handleSubTagLongPress(subTag),
+              borderRadius: BorderRadius.circular(8),
+              child: subTagContent,
+            ),
+          ),
+        ),
+        child: Material(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            onTap: () => _handleSubTagTap(subTag),
+            onLongPress: () => _handleSubTagLongPress(subTag),
+            borderRadius: BorderRadius.circular(8),
+            child: subTagContent,
+          ),
+        ),
+      );
+    } else {
+      // 已选中的子标签，支持拖拽到未选中区域删除记录
+      return Draggable<TagDragData>(
+        data: TagDragData(tag: subTag, source: 'complex'),
+        feedback: Material(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          elevation: 4,
+          child: Container(
+            width: 80, // 固定宽度，避免拖拽时变形
+            height: 44, // 固定高度
+            child: subTagContent,
+          ),
+        ),
+        childWhenDragging: Opacity(
+          opacity: 0.5,
+          child: Material(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: () => _handleSubTagTap(subTag),
+              onLongPress: () => _handleSubTagLongPress(subTag),
+              borderRadius: BorderRadius.circular(8),
+              child: subTagContent,
+            ),
+          ),
+        ),
+        child: Material(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            onTap: () => _handleSubTagTap(subTag),
+            onLongPress: () => _handleSubTagLongPress(subTag),
+            borderRadius: BorderRadius.circular(8),
+            child: subTagContent,
+          ),
+        ),
+      );
+    }
   }
 
   /// 获取标签类型对应的图标

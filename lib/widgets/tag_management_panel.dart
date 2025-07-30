@@ -3,6 +3,17 @@ import '../models/models.dart';
 import '../repositories/tag_repository.dart';
 import '../repositories/tag_record_repository.dart';
 
+/// 拖拽数据包装类，用于区分不同面板的拖拽
+class TagDragData {
+  final Tag tag;
+  final String source; // 'main' 或 'complex'
+  
+  const TagDragData({
+    required this.tag,
+    required this.source,
+  });
+}
+
 /// 折叠式标签管理面板组件
 /// 
 /// 提供折叠/展开的标签管理界面，布局结构：
@@ -26,6 +37,9 @@ class TagManagementPanel extends StatefulWidget {
   
   /// 标签点击回调（用于单标签聚焦模式）
   final Function(Tag)? onTagTap;
+  
+  /// 数据更新回调（用于通知父组件刷新）
+  final VoidCallback? onDataChanged;
 
   const TagManagementPanel({
     super.key,
@@ -34,6 +48,7 @@ class TagManagementPanel extends StatefulWidget {
     this.onTagVisibilityChanged,
     this.onTagLongPress,
     this.onTagTap,
+    this.onDataChanged,
   });
 
   @override
@@ -106,6 +121,11 @@ class _TagManagementPanelState extends State<TagManagementPanel>
     }
   }
 
+  /// 刷新数据（供外部调用，用于无痕更新）
+  Future<void> refreshData() async {
+    await _loadData();
+  }
+
   /// 加载标签和记录数据
   Future<void> _loadData() async {
     setState(() {
@@ -150,16 +170,9 @@ class _TagManagementPanelState extends State<TagManagementPanel>
 
   /// 处理标签点击
   void _handleTagTap(Tag tag) {
-    // 检查标签是否已添加到当日记录
-    final isAdded = _addedTagIds.contains(tag.id);
-    
-    if (isAdded) {
-      // 已添加的标签：进入聚焦模式
-      widget.onTagTap?.call(tag);
-    } else {
-      // 未添加的标签：添加到生效状态
-      _addTagToToday(tag);
-    }
+    // 所有标签点击都进入聚焦模式，方便查看标签在其他日期的使用情况
+    widget.onTagTap?.call(tag);
+    debugPrint('标签点击进入聚焦模式: ${tag.name}');
   }
 
   /// 处理标签长按
@@ -171,8 +184,78 @@ class _TagManagementPanelState extends State<TagManagementPanel>
       // 已添加的标签：调用外部回调（显示修改/删除对话框）
       widget.onTagLongPress?.call(tag);
     } else {
-      // 未添加的标签：长按无效果
+      // 未添加的标签：长按无效果（删除原先的添加逻辑）
       debugPrint('未添加标签的长按操作被忽略: ${tag.name}');
+    }
+  }
+
+  /// 处理标签拖拽到已选中区域
+  Future<void> _handleTagDrop(TagDragData dragData) async {
+    // 只接受来自主面板的拖拽
+    if (dragData.source != 'main') {
+      debugPrint('拒绝来自其他面板的拖拽: ${dragData.tag.name}');
+      return;
+    }
+    
+    final tag = dragData.tag;
+    
+    // 检查标签是否已经添加
+    if (_addedTagIds.contains(tag.id)) {
+      debugPrint('标签已存在，忽略拖拽: ${tag.name}');
+      return;
+    }
+    
+    await _addTagToToday(tag);
+  }
+
+  /// 处理标签拖拽到未选中区域（删除记录）
+  Future<void> _handleTagRemove(TagDragData dragData) async {
+    // 只接受来自主面板的拖拽
+    if (dragData.source != 'main') {
+      debugPrint('拒绝来自其他面板的拖拽: ${dragData.tag.name}');
+      return;
+    }
+    
+    final tag = dragData.tag;
+    
+    // 检查标签是否已经添加
+    if (!_addedTagIds.contains(tag.id)) {
+      debugPrint('标签未添加，无需删除: ${tag.name}');
+      return;
+    }
+    
+    await _removeTagFromToday(tag);
+  }
+
+  /// 从当日记录中删除标签
+  Future<void> _removeTagFromToday(Tag tag) async {
+    try {
+      debugPrint('从当日删除标签: ${tag.name}');
+      
+      // 查找当日该标签的记录
+      final existingRecord = await _recordRepository.findByTagAndDate(tag.id, widget.selectedDate);
+      
+      if (existingRecord != null) {
+        // 删除记录
+        await _recordRepository.deleteById(existingRecord.id);
+        debugPrint('删除标签记录: ${tag.name}');
+        
+        // 立即更新本地状态，避免重新加载
+        setState(() {
+          _addedTagIds.remove(tag.id);
+        });
+        
+        // 通知父组件数据已更新
+        widget.onDataChanged?.call();
+        
+        // 控制台输出成功信息
+        debugPrint('✅ 已删除标签记录: ${tag.name}');
+      } else {
+        debugPrint('未找到要删除的记录: ${tag.name}');
+      }
+    } catch (e) {
+      debugPrint('删除标签记录失败: $e');
+      // 错误信息已通过debugPrint输出
     }
   }
 
@@ -193,14 +276,7 @@ class _TagManagementPanelState extends State<TagManagementPanel>
       }
     } catch (e) {
       debugPrint('添加标签失败: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('添加标签失败: $e'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
+      // 错误信息已通过debugPrint输出
     }
   }
 
@@ -289,28 +365,20 @@ class _TagManagementPanelState extends State<TagManagementPanel>
       await _recordRepository.insert(newRecord);
       debugPrint('创建标签记录: ${tag.name} = $value');
       
-      // 重新加载数据以更新界面
-      await _loadData();
+      // 立即更新本地状态，避免重新加载
+      setState(() {
+        _addedTagIds.add(tag.id);
+      });
       
-      // 显示成功提示
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('已添加 ${tag.name}'),
-            backgroundColor: Theme.of(context).colorScheme.primary,
-          ),
-        );
-      }
+      // 通知父组件数据已更新
+      debugPrint('🔔 调用 onDataChanged 回调');
+      widget.onDataChanged?.call();
+      
+      // 控制台输出成功信息
+      debugPrint('✅ 已添加标签: ${tag.name}');
     } catch (e) {
       debugPrint('保存标签记录失败: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('保存失败: $e'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
+      // 错误信息已通过debugPrint输出
     }
   }
 
@@ -386,29 +454,34 @@ class _TagManagementPanelState extends State<TagManagementPanel>
               ),
             ),
           
-          // 主要内容区域：显示已选中的标签
-          if (selectedTags.isNotEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              child: _buildTagGrid(selectedTags, true, theme, colorScheme),
-            )
-          else
-            // 如果没有已选中的标签，显示提示信息
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: Text(
-                  '今日暂无标签记录',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: colorScheme.onSurface.withValues(alpha: 0.5),
-                  ),
-                ),
-              ),
-            ),
+          // 主要内容区域：显示已选中的标签（支持拖拽目标）
+          DragTarget<TagDragData>(
+            onAcceptWithDetails: (details) => _handleTagDrop(details.data),
+            builder: (context, candidateData, rejectedData) {
+              final isHighlighted = candidateData.isNotEmpty;
+              
+              return Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: selectedTags.isNotEmpty
+                    ? _buildTagGrid(selectedTags, true, theme, colorScheme)
+                    : Center(
+                        child: Text(
+                          isHighlighted 
+                              ? '拖拽到此处启用标签'
+                              : '今日暂无标签记录',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: isHighlighted 
+                                ? colorScheme.primary
+                                : colorScheme.onSurface.withValues(alpha: 0.5),
+                          ),
+                        ),
+                      ),
+              );
+            },
+          ),
           
-          // 可展开的未选中标签区域
+          // 可展开的未选中标签区域（支持拖拽目标）
           AnimatedBuilder(
             animation: _expandAnimation,
             builder: (context, child) {
@@ -421,10 +494,32 @@ class _TagManagementPanelState extends State<TagManagementPanel>
               );
             },
             child: unselectedTags.isNotEmpty
-                ? Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    child: _buildTagGrid(unselectedTags, false, theme, colorScheme),
+                ? DragTarget<TagDragData>(
+                    onAcceptWithDetails: (details) => _handleTagRemove(details.data),
+                    builder: (context, candidateData, rejectedData) {
+                      final isHighlighted = candidateData.isNotEmpty;
+                      
+                      return Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                        child: Column(
+                          children: [
+                            if (isHighlighted)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  '拖拽到此处删除标签记录',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.error,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            _buildTagGrid(unselectedTags, false, theme, colorScheme),
+                          ],
+                        ),
+                      );
+                    },
                   )
                 : const SizedBox.shrink(),
           ),
@@ -579,80 +674,150 @@ class _TagManagementPanelState extends State<TagManagementPanel>
       textColor = tagColor.withValues(alpha: 0.6);
     }
     
-    return Material(
-      color: backgroundColor,
-      borderRadius: BorderRadius.circular(8),
-      child: InkWell(
-        onTap: () => _handleTagTap(tag),
-        onLongPress: () => _handleTagLongPress(tag),
+    // 构建标签内容
+    Widget tagContent = Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor, width: borderWidth),
         borderRadius: BorderRadius.circular(8),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: borderColor, width: borderWidth),
-            borderRadius: BorderRadius.circular(8),
-            // 聚焦状态添加阴影效果
-            boxShadow: isFocused ? [
-              BoxShadow(
-                color: tagColor.withValues(alpha: 0.3),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ] : null,
+        // 聚焦状态添加阴影效果
+        boxShadow: isFocused ? [
+          BoxShadow(
+            color: tagColor.withValues(alpha: 0.3),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
           ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
+        ] : null,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 标签类型图标和聚焦指示器
+            Stack(
+              alignment: Alignment.center,
               children: [
-                // 标签类型图标和聚焦指示器
-                Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Icon(
-                      _getTagTypeIcon(tag.type),
-                      size: 14,
-                      color: textColor,
-                    ),
-                    // 聚焦指示器：右上角小圆点
-                    if (isFocused)
-                      Positioned(
-                        top: -2,
-                        right: -2,
-                        child: Container(
-                          width: 6,
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: tagColor,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
+                Icon(
+                  _getTagTypeIcon(tag.type),
+                  size: 14,
+                  color: textColor,
+                ),
+                // 聚焦指示器：右上角小圆点
+                if (isFocused)
+                  Positioned(
+                    top: -2,
+                    right: -2,
+                    child: Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: tagColor,
+                        shape: BoxShape.circle,
                       ),
-                  ],
-                ),
-                const SizedBox(height: 1),
-                
-                // 标签名称
-                Flexible(
-                  child: Text(
-                    tag.name,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: textColor,
-                      fontWeight: isFocused ? FontWeight.w600 : 
-                                  (isSelected ? FontWeight.w500 : FontWeight.normal),
-                      fontSize: 11,
                     ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
               ],
             ),
-          ),
+            const SizedBox(height: 1),
+            
+            // 标签名称
+            Flexible(
+              child: Text(
+                tag.name,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: textColor,
+                  fontWeight: isFocused ? FontWeight.w600 : 
+                              (isSelected ? FontWeight.w500 : FontWeight.normal),
+                  fontSize: 11,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
       ),
     );
+    
+    // 如果是未选中的标签，支持拖拽到已选中区域
+    if (!isSelected) {
+      return Draggable<TagDragData>(
+        data: TagDragData(tag: tag, source: 'main'),
+        feedback: Material(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          elevation: 4,
+          child: Container(
+            width: 80, // 固定宽度，避免拖拽时变形
+            height: 44, // 固定高度
+            child: tagContent,
+          ),
+        ),
+        childWhenDragging: Opacity(
+          opacity: 0.5,
+          child: Material(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: () => _handleTagTap(tag),
+              onLongPress: () => _handleTagLongPress(tag),
+              borderRadius: BorderRadius.circular(8),
+              child: tagContent,
+            ),
+          ),
+        ),
+        child: Material(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            onTap: () => _handleTagTap(tag),
+            onLongPress: () => _handleTagLongPress(tag),
+            borderRadius: BorderRadius.circular(8),
+            child: tagContent,
+          ),
+        ),
+      );
+    } else {
+      // 已选中的标签，支持拖拽到未选中区域删除记录
+      return Draggable<TagDragData>(
+        data: TagDragData(tag: tag, source: 'main'),
+        feedback: Material(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          elevation: 4,
+          child: Container(
+            width: 80, // 固定宽度，避免拖拽时变形
+            height: 44, // 固定高度
+            child: tagContent,
+          ),
+        ),
+        childWhenDragging: Opacity(
+          opacity: 0.5,
+          child: Material(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              onTap: () => _handleTagTap(tag),
+              onLongPress: () => _handleTagLongPress(tag),
+              borderRadius: BorderRadius.circular(8),
+              child: tagContent,
+            ),
+          ),
+        ),
+        child: Material(
+          color: backgroundColor,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            onTap: () => _handleTagTap(tag),
+            onLongPress: () => _handleTagLongPress(tag),
+            borderRadius: BorderRadius.circular(8),
+            child: tagContent,
+          ),
+        ),
+      );
+    }
   }
 
   /// 获取标签类型对应的图标

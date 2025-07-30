@@ -305,18 +305,19 @@ class _CalendarScreenState extends State<CalendarScreen> {
             ),
             // 标签管理面板
             TagManagementPanel(
-              key: ValueKey('${_selectedDay?.millisecondsSinceEpoch ?? 0}_$_dataRefreshCounter'),
+              key: ValueKey('${_selectedDay?.millisecondsSinceEpoch ?? 0}'),
               selectedDate: _selectedDay ?? DateTime.now(),
               focusedTag: _focusedTag,
               onTagTap: _handleTagTap,
               onTagLongPress: _handleTagLongPress,
               onTagVisibilityChanged: _handleTagVisibilityChanged,
+              onDataChanged: _handleDataChanged,
             ),
             
             // 复杂标签管理面板（在原先折叠式标签管理面板组件下方）
             if (_showingComplexTag != null)
               ComplexTagManagementPanel(
-                key: ValueKey('${_showingComplexTag!.id}_${_selectedDay?.millisecondsSinceEpoch ?? 0}_$_dataRefreshCounter'),
+                key: ValueKey('${_showingComplexTag!.id}_${_selectedDay?.millisecondsSinceEpoch ?? 0}'),
                 selectedDate: _selectedDay ?? DateTime.now(),
                 complexTag: _showingComplexTag!,
                 focusedSubTag: _focusedSubTag,
@@ -324,6 +325,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 onSubTagLongPress: _handleSubTagLongPress,
                 onComplexTagSave: _handleComplexTagSave,
                 onClose: _handleComplexTagPanelClose,
+                onDataChanged: _handleDataChanged,
               ),
             ],
           ),
@@ -520,6 +522,25 @@ class _CalendarScreenState extends State<CalendarScreen> {
     debugPrint('关闭复杂标签管理面板');
   }
 
+  /// 处理数据更新
+  void _handleDataChanged() {
+    // 清空缓存，强制重新加载当前月份的数据
+    _cachedMonth = null;
+    _recordCache.clear();
+    _tagRecords.clear();
+    
+    // 重新加载数据以更新日历标记
+    _loadTagsAndRecords().then((_) {
+      // 只更新状态，不强制重建子组件
+      if (mounted) {
+        setState(() {
+          // 不增加 _dataRefreshCounter，避免子组件重建
+        });
+      }
+    });
+    debugPrint('✅ 数据已更新，清空缓存并刷新日历标记');
+  }
+
   /// 处理子标签点击（用于子标签聚焦模式）
   void _handleSubTagTap(Tag subTag) {
     setState(() {
@@ -559,22 +580,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
   void _handleComplexTagSave(Tag complexTag, List<String> selectedSubTags) {
     debugPrint('复杂标签记录保存: ${complexTag.name} = $selectedSubTags');
     
-    // 重新加载数据以更新界面
+    // 清空缓存，强制重新加载数据
+    _cachedMonth = null;
+    _recordCache.clear();
+    _tagRecords.clear();
+    
+    // 重新加载数据以更新界面，但不强制重建子组件
     _loadTagsAndRecords().then((_) {
-      setState(() {
-        _dataRefreshCounter++;
-      });
+      if (mounted) {
+        setState(() {
+          // 只更新状态，不增加刷新计数器
+        });
+      }
     });
     
-    // 显示成功提示
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已保存 ${complexTag.name} 的记录'),
-          backgroundColor: Theme.of(context).colorScheme.primary,
-        ),
-      );
-    }
+    // 控制台输出成功信息
+    debugPrint('✅ 已保存复杂标签记录: ${complexTag.name}');
   }
 
   /// 显示标签数值修改对话框
@@ -698,13 +719,20 @@ class _CalendarScreenState extends State<CalendarScreen> {
         debugPrint('创建标签记录: ${tag.name} = $value');
       }
       
-      // 重新加载数据以更新界面
+      // 清空缓存，强制重新加载数据
+      _cachedMonth = null;
+      _recordCache.clear();
+      _tagRecords.clear();
+      
+      // 重新加载数据以更新界面，但不强制重建子组件
       await _loadTagsAndRecords();
       
       // 触发界面刷新
-      setState(() {
-        _dataRefreshCounter++;
-      });
+      if (mounted) {
+        setState(() {
+          // 只更新状态，不增加刷新计数器
+        });
+      }
       
       // 显示成功提示
       if (mounted) {
@@ -734,13 +762,20 @@ class _CalendarScreenState extends State<CalendarScreen> {
       await _recordRepository.deleteById(record.id);
       debugPrint('删除标签记录: ${record.id}');
       
-      // 重新加载数据以更新界面
+      // 清空缓存，强制重新加载数据
+      _cachedMonth = null;
+      _recordCache.clear();
+      _tagRecords.clear();
+      
+      // 重新加载数据以更新界面，但不强制重建子组件
       await _loadTagsAndRecords();
       
       // 触发界面刷新
-      setState(() {
-        _dataRefreshCounter++;
-      });
+      if (mounted) {
+        setState(() {
+          // 只更新状态，不增加刷新计数器
+        });
+      }
       
       // 显示成功提示
       if (mounted) {
